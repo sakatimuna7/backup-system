@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.7.0] - 2026-09-19
+
+### Added
+- Package installation support via apt-get
+- User creation with shell, home directory, and group management
+- `recovery run` now installs packages and creates users before database restore
+- Skip existing users automatically
+
+### Changed
+- Recovery workflow order: packages → users → databases
+- `installPackages` runs apt-get update before install
+- `createUser` checks user existence before creation
+
 ## [0.6.0] - 2026-09-19
 
 ### Added

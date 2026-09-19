@@ -122,7 +122,7 @@ func TestRecoveryPlan(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.6.0" {
+	if version != "0.7.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -304,5 +304,23 @@ func TestRecoveryDatabaseValidation(t *testing.T) {
 	}
 	if err := validateRecovery(RecoveryConfig{Databases: []RecoveryDatabase{{Name: "db", Engine: "postgresql", DumpPath: "/tmp/dump.sql", Database: ""}}}); err == nil {
 		t.Fatal("expected empty database name rejection")
+	}
+}
+
+func TestRecoveryPackageValidation(t *testing.T) {
+	if err := validateRecovery(RecoveryConfig{Packages: RecoveryPackages{Apt: []string{"nginx", "postgresql"}}}); err != nil {
+		t.Fatalf("expected packages to be valid: %v", err)
+	}
+}
+
+func TestRecoveryUserValidation(t *testing.T) {
+	if err := validateRecovery(RecoveryConfig{Users: []RecoveryUser{{Name: "", Home: "/home/user"}}}); err == nil {
+		t.Fatal("expected empty name rejection")
+	}
+	if err := validateRecovery(RecoveryConfig{Users: []RecoveryUser{{Name: "deploy", Home: "relative"}}}); err == nil {
+		t.Fatal("expected relative home rejection")
+	}
+	if err := validateRecovery(RecoveryConfig{Users: []RecoveryUser{{Name: "deploy", Home: "/home/deploy", CreateHome: true}}}); err != nil {
+		t.Fatalf("expected valid user config: %v", err)
 	}
 }

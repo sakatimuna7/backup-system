@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version       = "0.6.0"
+	version       = "0.7.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -858,6 +858,20 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 		return checkErrs
 	}
 
+	// Install packages
+	if len(c.Recovery.Packages.Apt) > 0 {
+		if pkgErrs := installPackages(c.Recovery.Packages.Apt); len(pkgErrs) > 0 {
+			errs = append(errs, pkgErrs...)
+		}
+	}
+
+	// Create users
+	if len(c.Recovery.Users) > 0 {
+		if userErrs := createUsers(c.Recovery.Users); len(userErrs) > 0 {
+			errs = append(errs, userErrs...)
+		}
+	}
+
 	// Restore databases yang ada di staging
 	for _, db := range c.Recovery.Databases {
 		if !db.Restore {
@@ -875,6 +889,69 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 	}
 
 	return errs
+}
+
+func installPackages(packages []string) []string {
+	var errs []string
+	if len(packages) == 0 {
+		return errs
+	}
+
+	// apt-get update
+	cmd := exec.Command("apt-get", "update")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		errs = append(errs, fmt.Sprintf("apt-get update failed: %v (output: %s)", err, string(out)))
+		return errs
+	}
+
+	// apt-get install
+	args := append([]string{"install", "-y"}, packages...)
+	cmd = exec.Command("apt-get", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		errs = append(errs, fmt.Sprintf("apt-get install failed: %v (output: %s)", err, string(out)))
+	}
+
+	return errs
+}
+
+func createUsers(users []RecoveryUser) []string {
+	var errs []string
+	for _, user := range users {
+		if err := createUser(user); err != nil {
+			errs = append(errs, fmt.Sprintf("user %s creation failed: %v", user.Name, err))
+		}
+	}
+	return errs
+}
+
+func createUser(user RecoveryUser) error {
+	// Check if user exists
+	_, err := exec.Command("id", user.Name).CombinedOutput()
+	if err == nil {
+		return nil // user already exists
+	}
+
+	// Build useradd args
+	args := []string{"-s", user.Shell, "-d", user.Home}
+	if user.CreateHome {
+		args = append(args, "-m")
+	}
+	args = append(args, user.Name)
+
+	cmd := exec.Command("useradd", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("useradd failed: %w (output: %s)", err, string(out))
+	}
+
+	// Add to groups
+	for _, group := range user.Groups {
+		cmd := exec.Command("usermod", "-aG", group, user.Name)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("usermod failed for group %s: %w (output: %s)", group, err, string(out))
+		}
+	}
+
+	return nil
 }
 
 func restoreDatabase(db RecoveryDatabase, dumpPath string) error {
