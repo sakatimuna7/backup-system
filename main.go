@@ -801,7 +801,7 @@ func main() {
 	var selectorErr error
 	if command == "retention" {
 		selector, prune, selectorErr = retentionArgs(args[1:])
-	} else if command != "restore" {
+	} else if command != "restore" && command != "schedule" {
 		selector, selectorErr = repositorySelector(args[1:])
 	}
 	if selectorErr != nil {
