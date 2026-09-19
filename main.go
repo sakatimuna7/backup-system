@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,9 +10,17 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+const (
+	version       = "0.1.0"
+	resticTimeout = 12 * time.Hour
+)
+
+var errResticMissing = errors.New("restic is not installed or not in PATH; install it with: sudo apt install restic")
 
 type Config struct {
 	Version    int              `yaml:"version"`
@@ -29,8 +38,10 @@ type BackupConfig struct {
 	Exclude []string `yaml:"exclude"`
 }
 type RetentionConfig struct {
-	Daily, Weekly, Monthly int
-	Prune                  bool
+	Daily   int  `yaml:"daily"`
+	Weekly  int  `yaml:"weekly"`
+	Monthly int  `yaml:"monthly"`
+	Prune   bool `yaml:"prune"`
 }
 type VerifyConfig struct {
 	AfterBackup bool `yaml:"after_backup"`
@@ -69,17 +80,47 @@ func loadConfig(path string) (Config, error) {
 	if c.Retention.Daily < 0 || c.Retention.Weekly < 0 || c.Retention.Monthly < 0 {
 		return c, errors.New("retention values cannot be negative")
 	}
-	st, err := os.Stat(c.Repository.PasswordFile)
+	lst, err := os.Lstat(c.Repository.PasswordFile)
 	if err != nil {
 		return c, fmt.Errorf("password file: %w", err)
 	}
-	if st.IsDir() {
+	if lst.Mode()&os.ModeSymlink != 0 {
+		return c, errors.New("password_file must not be a symlink")
+	}
+	if lst.IsDir() {
 		return c, errors.New("password_file must be a file")
 	}
-	if st.Mode().Perm()&0o077 != 0 {
+	if lst.Size() == 0 {
+		return c, errors.New("password_file must not be empty")
+	}
+	if lst.Mode().Perm()&0o077 != 0 {
 		return c, errors.New("password_file must not be group/world-readable")
 	}
 	return c, nil
+}
+
+func validateRestoreTarget(target string) error {
+	if target == "/" {
+		return errors.New("restore target / is refused; restore to a sandbox or explicit mount point")
+	}
+	info, err := os.Stat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("restore target: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("restore target must be a directory")
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return fmt.Errorf("read restore target: %w", err)
+	}
+	if len(entries) != 0 {
+		return errors.New("restore target must be empty; restore to a new sandbox directory")
+	}
+	return nil
 }
 
 func acquireLock(path string) (*os.File, error) {
@@ -94,11 +135,22 @@ func acquireLock(path string) (*os.File, error) {
 	return f, nil
 }
 func (a *app) run(args ...string) error {
-	cmd := exec.Command("restic", args...)
+	if _, err := exec.LookPath("restic"); err != nil {
+		return errResticMissing
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), resticTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "restic", args...)
 	cmd.Env = append(os.Environ(), "RESTIC_REPOSITORY="+a.cfg.Repository.URL, "RESTIC_PASSWORD_FILE="+a.cfg.Repository.PasswordFile)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("restic timed out after %s", resticTimeout)
+		}
+		return err
+	}
+	return nil
 }
 func (a *app) backup() error {
 	args := []string{"backup"}
@@ -123,7 +175,7 @@ func (a *app) retention(prune bool) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: backup-system [-config path] <install|init|backup|snapshots|verify|retention|restore>")
+	fmt.Fprintln(os.Stderr, "usage: backup-system [-config path] <install|version|config-check|init|backup|snapshots|verify|retention|restore>")
 }
 
 func install(configPath string) error {
@@ -174,11 +226,28 @@ func main() {
 		os.Exit(2)
 	}
 	command := args[0]
+	if command == "version" {
+		fmt.Println(version)
+		return
+	}
 	if command == "install" {
 		if err := install(configPath); err != nil {
 			fmt.Fprintln(os.Stderr, "backup-system:", err)
 			os.Exit(1)
 		}
+		return
+	}
+	if command == "config-check" {
+		if _, err := loadConfig(configPath); err != nil {
+			fmt.Fprintln(os.Stderr, "backup-system:", err)
+			os.Exit(1)
+		}
+		if _, err := exec.LookPath("restic"); err != nil {
+			fmt.Fprintln(os.Stderr, "backup-system:", errResticMissing)
+			os.Exit(1)
+		}
+		fmt.Println("config: OK")
+		fmt.Println("restic: OK")
 		return
 	}
 	c, err := loadConfig(configPath)
@@ -188,7 +257,7 @@ func main() {
 	}
 	a := &app{cfg: c}
 	lockPath := filepath.Join(filepath.Dir(configPath), ".lock")
-	if command != "init" && command != "install" {
+	if command != "install" && command != "config-check" && command != "version" {
 		a.lock, err = acquireLock(lockPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "backup-system:", err)
@@ -198,25 +267,44 @@ func main() {
 	}
 	switch command {
 	case "init":
-		err = a.run("init")
+		if len(args) != 1 {
+			err = errors.New("usage: init")
+		} else {
+			err = a.run("init")
+		}
 	case "backup":
-		err = a.backup()
-		if err == nil && c.Retention.Prune {
-			err = a.retention(true)
+		if len(args) != 1 {
+			err = errors.New("usage: backup")
+		} else {
+			err = a.backup()
+			if err == nil && c.Retention.Prune {
+				err = a.retention(true)
+			}
 		}
 	case "snapshots":
-		err = a.run("snapshots")
+		if len(args) != 1 {
+			err = errors.New("usage: snapshots")
+		} else {
+			err = a.run("snapshots")
+		}
 	case "verify":
-		err = a.run("check")
+		if len(args) != 1 {
+			err = errors.New("usage: verify")
+		} else {
+			err = a.run("check")
+		}
 	case "retention":
-		prune := len(args) > 1 && args[1] == "--prune"
-		err = a.retention(prune)
+		if len(args) > 2 || (len(args) == 2 && args[1] != "--prune" && args[1] != "--dry-run") {
+			err = errors.New("usage: retention [--dry-run|--prune]")
+		} else {
+			err = a.retention(len(args) == 2 && args[1] == "--prune")
+		}
 	case "restore":
-		if len(args) < 3 {
+		if len(args) != 3 {
 			err = errors.New("usage: restore <snapshot> <target>")
 		} else if !filepath.IsAbs(args[2]) {
 			err = errors.New("restore target must be absolute")
-		} else {
+		} else if err = validateRestoreTarget(args[2]); err == nil {
 			err = a.run("restore", args[1], "--target", args[2])
 		}
 	default:

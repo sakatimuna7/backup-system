@@ -96,11 +96,12 @@ sudo systemctl reload nginx
 sudo rsync -aHAX /tmp/server-restore/home/deploy/apps/ /home/deploy/apps/
 ```
 
-For a full server recovery (e.g., after total disk failure), restore to a fresh
-install:
+For a full server recovery (e.g., after total disk failure), restore into a
+new empty directory on the fresh install:
 
 ```sh
-# On the fresh server, after installing backup-system + restic + password:
+sudo mkdir -p /mnt/recovery
+# The target must be empty. After installing backup-system + restic + password:
 sudo backup-system -config /etc/backup-system/config.yml \
   restore latest /mnt/recovery
 

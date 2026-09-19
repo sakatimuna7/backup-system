@@ -47,10 +47,12 @@ Edit only `config.yml` for paths, excludes, repository, and retention. The passw
 
 ```sh
 backup-system install
+backup-system config-check
 backup-system init
 backup-system backup
 backup-system snapshots
 backup-system verify
+backup-system version
 backup-system retention --dry-run
 backup-system retention --prune
 backup-system restore latest /tmp/server-restore
