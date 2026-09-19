@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,16 @@ func TestAcquireLockConflicts(t *testing.T) {
 	defer first.Close()
 	if _, err := acquireLock(path); err == nil {
 		t.Fatal("expected lock conflict")
+	}
+}
+
+func TestConfigAndUX(t *testing.T) {
+	if version != "0.1.0" {
+		t.Fatalf("unexpected version: %s", version)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.yml")
+	if _, err := loadConfig(missing); err == nil || !strings.Contains(err.Error(), "config not found") {
+		t.Fatalf("unexpected missing config error: %v", err)
 	}
 }
 

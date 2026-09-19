@@ -22,6 +22,14 @@ const (
 
 var errResticMissing = errors.New("restic is not installed or not in PATH; install it with: sudo apt install restic")
 
+func resticPath() (string, error) {
+	path, err := exec.LookPath("restic")
+	if err != nil {
+		return "", errResticMissing
+	}
+	return path, nil
+}
+
 type Config struct {
 	Version    int              `yaml:"version"`
 	Repository RepositoryConfig `yaml:"repository"`
@@ -55,7 +63,10 @@ type app struct {
 func loadConfig(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, err
+		if errors.Is(err, os.ErrNotExist) {
+			return Config{}, fmt.Errorf("config not found: %s (run `backup-system install` first)", path)
+		}
+		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var c Config
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
@@ -64,10 +75,13 @@ func loadConfig(path string) (Config, error) {
 		return c, fmt.Errorf("invalid config: %w", err)
 	}
 	if c.Version != 1 {
-		return c, fmt.Errorf("version must be 1")
+		return c, fmt.Errorf("unsupported config version %d (expected 1)", c.Version)
 	}
-	if c.Repository.URL == "" || c.Repository.PasswordFile == "" {
-		return c, errors.New("repository.url and repository.password_file are required")
+	if c.Repository.URL == "" {
+		return c, errors.New("repository.url is required")
+	}
+	if c.Repository.PasswordFile == "" {
+		return c, errors.New("repository.password_file is required")
 	}
 	if len(c.Backup.Paths) == 0 {
 		return c, errors.New("backup.paths must not be empty")
@@ -135,20 +149,25 @@ func acquireLock(path string) (*os.File, error) {
 	return f, nil
 }
 func (a *app) run(args ...string) error {
-	if _, err := exec.LookPath("restic"); err != nil {
-		return errResticMissing
+	restic, err := resticPath()
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), resticTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "restic", args...)
+	cmd := exec.CommandContext(ctx, restic, args...)
 	cmd.Env = append(os.Environ(), "RESTIC_REPOSITORY="+a.cfg.Repository.URL, "RESTIC_PASSWORD_FILE="+a.cfg.Repository.PasswordFile)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("restic timed out after %s", resticTimeout)
+			return fmt.Errorf("restic timed out after %s; check repository connectivity and retry", resticTimeout)
 		}
-		return err
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return fmt.Errorf("restic failed (exit %d): check the repository URL, password file, and restic output above", exitErr.ExitCode())
+		}
+		return fmt.Errorf("run restic: %w", err)
 	}
 	return nil
 }
@@ -226,8 +245,14 @@ func main() {
 		os.Exit(2)
 	}
 	command := args[0]
+	known := map[string]bool{"install": true, "version": true, "config-check": true, "init": true, "backup": true, "snapshots": true, "verify": true, "retention": true, "restore": true}
+	if !known[command] {
+		fmt.Fprintf(os.Stderr, "backup-system: unknown command %q\n", command)
+		usage()
+		os.Exit(2)
+	}
 	if command == "version" {
-		fmt.Println(version)
+		fmt.Printf("backup-system %s\n", version)
 		return
 	}
 	if command == "install" {
@@ -242,12 +267,13 @@ func main() {
 			fmt.Fprintln(os.Stderr, "backup-system:", err)
 			os.Exit(1)
 		}
-		if _, err := exec.LookPath("restic"); err != nil {
-			fmt.Fprintln(os.Stderr, "backup-system:", errResticMissing)
+		restic, err := resticPath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "backup-system:", err)
 			os.Exit(1)
 		}
 		fmt.Println("config: OK")
-		fmt.Println("restic: OK")
+		fmt.Printf("restic: OK (%s)\n", restic)
 		return
 	}
 	c, err := loadConfig(configPath)

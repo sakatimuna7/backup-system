@@ -58,7 +58,9 @@ backup-system retention --prune
 backup-system restore latest /tmp/server-restore
 ```
 
-Use another config with `-config /path/to/config.yml`. `backup` and `retention --prune` take an exclusive lock. Retention is dry-run by default unless `--prune` is explicit or `retention.prune: true` is configured for a normal `backup` run.
+Use another config with `-config /path/to/config.yml`. Run `config-check` before `init` or `backup` to validate the YAML, password file, and restic installation. `backup` and `retention --prune` take an exclusive lock. Retention is dry-run by default unless `--prune` is explicit or `retention.prune: true` is configured for a normal `backup` run.
+
+Common errors are actionable: a missing config points to `backup-system install`, a missing restic binary suggests `sudo apt install restic`, and restic failures include the exit code while preserving restic's detailed output.
 
 ## systemd (optional)
 
