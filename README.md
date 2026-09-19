@@ -17,6 +17,22 @@ go build -o backup-system ./
 
 ## Configure
 
+Quick start for first-time setup:
+
+```sh
+sudo install -m 755 backup-system /usr/local/bin/backup-system
+sudo backup-system install
+sudo nano /etc/backup-system/config.yml
+sudo nano /etc/backup-system/password
+```
+
+`install` creates:
+
+- `/etc/backup-system/config.yml` (template)
+- `/etc/backup-system/password` (empty, mode `600`)
+
+Manual setup (equivalent):
+
 ```sh
 sudo install -d -m 700 /etc/backup-system
 sudo cp config.example.yml /etc/backup-system/config.yml
@@ -30,6 +46,7 @@ Edit only `config.yml` for paths, excludes, repository, and retention. The passw
 ## Commands
 
 ```sh
+backup-system install
 backup-system init
 backup-system backup
 backup-system snapshots
@@ -40,6 +57,22 @@ backup-system restore latest /tmp/server-restore
 ```
 
 Use another config with `-config /path/to/config.yml`. `backup` and `retention --prune` take an exclusive lock. Retention is dry-run by default unless `--prune` is explicit or `retention.prune: true` is configured for a normal `backup` run.
+
+## systemd (optional)
+
+Templates are provided in [`contrib/`](contrib):
+
+- `contrib/backup-system.service`
+- `contrib/backup-system.timer`
+
+Install:
+
+```sh
+sudo cp contrib/backup-system.service /etc/systemd/system/
+sudo cp contrib/backup-system.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now backup-system.timer
+```
 
 ## MVP boundary
 

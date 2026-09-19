@@ -1,0 +1,13 @@
+[Unit]
+Description=backup-system one-shot backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup-system backup
+# Optional custom config path:
+# ExecStart=/usr/local/bin/backup-system -config /etc/backup-system/config.yml backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

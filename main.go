@@ -123,7 +123,44 @@ func (a *app) retention(prune bool) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: backup-system [-config path] <init|backup|snapshots|verify|retention|restore>")
+	fmt.Fprintln(os.Stderr, "usage: backup-system [-config path] <install|init|backup|snapshots|verify|retention|restore>")
+}
+
+func install(configPath string) error {
+	baseDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(baseDir, 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	passwordFile := filepath.Join(baseDir, "password")
+	if _, err := os.Stat(passwordFile); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(passwordFile, []byte(""), 0o600); err != nil {
+			return fmt.Errorf("create password file: %w", err)
+		}
+		fmt.Printf("created %s (empty)\n", passwordFile)
+	}
+	if err := os.Chmod(passwordFile, 0o600); err != nil {
+		return fmt.Errorf("chmod password file: %w", err)
+	}
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		example := Config{
+			Version:    1,
+			Repository: RepositoryConfig{URL: "local:/var/backups/restic", PasswordFile: passwordFile},
+			Backup:     BackupConfig{Paths: []string{"/etc", "/home"}, Exclude: []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/var/cache", "/var/tmp", "/mnt", "/media"}},
+			Retention:  RetentionConfig{Daily: 14, Weekly: 8, Monthly: 6, Prune: false},
+			Verify:     VerifyConfig{AfterBackup: true},
+		}
+		data, err := yaml.Marshal(example)
+		if err != nil {
+			return fmt.Errorf("render config template: %w", err)
+		}
+		if err := os.WriteFile(configPath, data, 0o600); err != nil {
+			return fmt.Errorf("write config: %w", err)
+		}
+		fmt.Printf("created %s\n", configPath)
+	}
+	fmt.Println("install complete")
+	fmt.Printf("next steps:\n  1) edit %s\n  2) set password in %s\n  3) run: backup-system -config %s init\n", configPath, passwordFile, configPath)
+	return nil
 }
 func main() {
 	configPath := "/etc/backup-system/config.yml"
@@ -137,6 +174,13 @@ func main() {
 		os.Exit(2)
 	}
 	command := args[0]
+	if command == "install" {
+		if err := install(configPath); err != nil {
+			fmt.Fprintln(os.Stderr, "backup-system:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	c, err := loadConfig(configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-system:", err)
@@ -144,7 +188,7 @@ func main() {
 	}
 	a := &app{cfg: c}
 	lockPath := filepath.Join(filepath.Dir(configPath), ".lock")
-	if command != "init" {
+	if command != "init" && command != "install" {
 		a.lock, err = acquireLock(lockPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "backup-system:", err)
