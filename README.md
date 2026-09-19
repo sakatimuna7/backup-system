@@ -43,7 +43,14 @@ sudo install -m 600 /dev/null /etc/backup-system/password
 
 Edit only `config.yml` for paths, excludes, repository, and retention. The password stays outside the YAML file so it cannot be committed accidentally.
 
-## Commands
+## Help and commands
+
+```sh
+backup-system --help
+backup-system backup --help
+```
+
+Mistyped commands return a close suggestion, for example `bakcup` suggests `backup`.
 
 ```sh
 backup-system install

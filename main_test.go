@@ -66,12 +66,27 @@ func TestAcquireLockConflicts(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.1.0" {
+	if version != "0.1.1" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
 	if _, err := loadConfig(missing); err == nil || !strings.Contains(err.Error(), "config not found") {
 		t.Fatalf("unexpected missing config error: %v", err)
+	}
+}
+
+func TestSuggestion(t *testing.T) {
+	if got := suggestion("bakcup"); got != "backup" {
+		t.Fatalf("suggestion = %q, want backup", got)
+	}
+	if got := suggestion("xyz"); got != "" {
+		t.Fatalf("unexpected suggestion: %q", got)
+	}
+}
+
+func TestContains(t *testing.T) {
+	if !contains(commands, "backup") || contains(commands, "bakcup") {
+		t.Fatal("contains returned unexpected result")
 	}
 }
 

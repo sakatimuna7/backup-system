@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version       = "0.1.0"
+	version       = "0.1.1"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -193,9 +193,105 @@ func (a *app) retention(prune bool) error {
 	return a.run(args...)
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: backup-system [-config path] <install|version|config-check|init|backup|snapshots|verify|retention|restore>")
+var commands = []string{"install", "version", "config-check", "init", "backup", "snapshots", "verify", "retention", "restore"}
+
+func printHelp(command string) {
+	if command == "" {
+		fmt.Println("backup-system - simple, auditable VPS backups powered by restic")
+		fmt.Println()
+		fmt.Println("USAGE")
+		fmt.Println("  backup-system [-config path] <command> [flags]")
+		fmt.Println()
+		fmt.Println("AVAILABLE COMMANDS")
+		fmt.Println("  install:       Create the config and password file")
+		fmt.Println("  version:       Show the installed version")
+		fmt.Println("  config-check:  Validate config, secrets, and restic")
+		fmt.Println("  init:          Initialize the restic repository")
+		fmt.Println("  backup:        Create a backup snapshot")
+		fmt.Println("  snapshots:     List available snapshots")
+		fmt.Println("  verify:        Check repository integrity")
+		fmt.Println("  retention:     Preview or prune old snapshots")
+		fmt.Println("  restore:       Restore a snapshot to an empty directory")
+		fmt.Println()
+		fmt.Println("FLAGS")
+		fmt.Println("  -config path   Use a config file other than /etc/backup-system/config.yml")
+		fmt.Println("  --help         Show help for a command")
+		fmt.Println()
+		fmt.Println("EXAMPLES")
+		fmt.Println("  backup-system install")
+		fmt.Println("  backup-system config-check")
+		fmt.Println("  backup-system backup")
+		fmt.Println("  backup-system restore latest /tmp/server-restore")
+		fmt.Println()
+		fmt.Println("Run 'backup-system <command> --help' for more information about a command.")
+		return
+	}
+	fmt.Printf("backup-system %s\n\n", command)
+	switch command {
+	case "install":
+		fmt.Println("Create the default config and password file.")
+	case "version":
+		fmt.Println("Show the installed backup-system version.")
+	case "config-check":
+		fmt.Println("Validate YAML, paths, password permissions, and restic.")
+	case "init":
+		fmt.Println("Initialize the configured restic repository.")
+	case "backup":
+		fmt.Println("Back up configured paths and optionally verify the repository.")
+	case "snapshots":
+		fmt.Println("List snapshots in the configured repository.")
+	case "verify":
+		fmt.Println("Check repository integrity with restic.")
+	case "retention":
+		fmt.Println("Preview retention by default; use --prune to delete old snapshots.")
+		fmt.Println("\nUSAGE\n  backup-system retention [--dry-run|--prune]")
+	case "restore":
+		fmt.Println("Restore a snapshot into a new or empty absolute directory.")
+		fmt.Println("\nUSAGE\n  backup-system restore <snapshot|latest> <absolute-target>")
+	}
+	fmt.Println("\nUse 'backup-system --help' for the full command list.")
 }
+
+func levenshtein(a, b string) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i, ar := range a {
+		cur := make([]int, len(b)+1)
+		cur[0] = i + 1
+		for j, br := range b {
+			cost := 0
+			if ar != br {
+				cost = 1
+			}
+			cur[j+1] = min(cur[j]+1, prev[j+1]+1, prev[j]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
+}
+
+func suggestion(input string) string {
+	best, distance := "", 3
+	for _, command := range commands {
+		if d := levenshtein(input, command); d < distance {
+			best, distance = command, d
+		}
+	}
+	return best
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func usage() { printHelp("") }
 
 func install(configPath string) error {
 	baseDir := filepath.Dir(configPath)
@@ -240,16 +336,28 @@ func main() {
 		configPath = args[1]
 		args = args[2:]
 	}
-	if len(args) == 0 {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "help" {
+		if len(args) > 1 {
+			printHelp(args[1])
+		} else {
+			usage()
+		}
+		return
+	}
+	command := args[0]
+	if suggestion := suggestion(command); suggestion != "" && !contains(commands, command) {
+		fmt.Fprintf(os.Stderr, "backup-system: unknown command %q\n\nDid you mean %q?\n\n", command, suggestion)
 		usage()
 		os.Exit(2)
 	}
-	command := args[0]
-	known := map[string]bool{"install": true, "version": true, "config-check": true, "init": true, "backup": true, "snapshots": true, "verify": true, "retention": true, "restore": true}
-	if !known[command] {
-		fmt.Fprintf(os.Stderr, "backup-system: unknown command %q\n", command)
+	if !contains(commands, command) {
+		fmt.Fprintf(os.Stderr, "backup-system: unknown command %q\n\n", command)
 		usage()
 		os.Exit(2)
+	}
+	if len(args) > 1 && args[1] == "--help" {
+		printHelp(command)
+		return
 	}
 	if command == "version" {
 		fmt.Printf("backup-system %s\n", version)
