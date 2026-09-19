@@ -84,6 +84,7 @@ backup-system restore latest /tmp/server-restore
 backup-system schedule render
 backup-system schedule install
 backup-system schedule status
+backup-system recovery plan
 ```
 
 For Google Drive or another rclone backend, configure OAuth with `rclone config`, copy its config to `/etc/backup-system/rclone.conf` with mode `600`, then set `url: "rclone:gdrive:backup-system/vps-01"` and `rclone_config` in the repository entry. The wrapper passes `RCLONE_CONFIG` only to that repository operation; OAuth tokens never belong in `config.yml`.

@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 repositories:
   - name: local
@@ -40,3 +40,35 @@ schedule:
   on_calendar: "*-*-* 02:00:00"
   persistent: true
   randomized_delay: "15m"
+
+# Optional fresh-OS recovery manifest. `recovery plan` is read-only.
+recovery:
+  packages:
+    apt:
+      - nginx
+      - postgresql
+      - redis-server
+      - git
+  users:
+    - name: deploy
+      shell: "/bin/bash"
+      home: "/home/deploy"
+      groups: [sudo]
+      create_home: true
+  restore:
+    snapshot: "latest"
+    staging: "/recovery/staging"
+    include:
+      - "/etc/nginx"
+      - "/home/deploy/apps"
+      - "/var/backups/postgresql"
+    exclude:
+      - "/etc/shadow"
+      - "/etc/ssh"
+      - "/home/deploy/.ssh"
+  downloads:
+    - name: custom-cli
+      url: "https://downloads.example.com/custom-cli-linux-amd64"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      install_to: "/usr/local/bin/custom-cli"
+      mode: "0755"

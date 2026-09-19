@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +18,7 @@ import (
 )
 
 const (
-	version       = "0.3.0"
+	version       = "0.4.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -38,7 +40,138 @@ type Config struct {
 	Retention    RetentionConfig    `yaml:"retention"`
 	Verify       VerifyConfig       `yaml:"verify"`
 	Schedule     ScheduleConfig     `yaml:"schedule"`
+	Recovery     RecoveryConfig     `yaml:"recovery"`
 }
+
+type RecoveryConfig struct {
+	Packages     RecoveryPackages      `yaml:"packages"`
+	Runtimes     []RecoveryRuntime     `yaml:"runtimes"`
+	Users        []RecoveryUser        `yaml:"users"`
+	Directories  []RecoveryDirectory   `yaml:"directories"`
+	Restore      RecoveryRestore       `yaml:"restore"`
+	Databases    []RecoveryDatabase    `yaml:"databases"`
+	Applications []RecoveryApplication `yaml:"applications"`
+	Services     RecoveryServices      `yaml:"services"`
+	Downloads    []RecoveryDownload    `yaml:"downloads"`
+}
+type RecoveryPackages struct {
+	Apt []string `yaml:"apt"`
+}
+type RecoveryRuntime struct {
+	Name    string `yaml:"name"`
+	Install string `yaml:"install"`
+	Version string `yaml:"version"`
+}
+type RecoveryUser struct {
+	Name       string   `yaml:"name"`
+	Shell      string   `yaml:"shell"`
+	Home       string   `yaml:"home"`
+	Groups     []string `yaml:"groups"`
+	CreateHome bool     `yaml:"create_home"`
+}
+type RecoveryDirectory struct {
+	Path  string `yaml:"path"`
+	Owner string `yaml:"owner"`
+	Group string `yaml:"group"`
+	Mode  string `yaml:"mode"`
+}
+type RecoveryRestore struct {
+	Snapshot string   `yaml:"snapshot"`
+	Staging  string   `yaml:"staging"`
+	Include  []string `yaml:"include"`
+	Exclude  []string `yaml:"exclude"`
+}
+type RecoveryDatabase struct {
+	Name     string `yaml:"name"`
+	Engine   string `yaml:"engine"`
+	Database string `yaml:"database"`
+	Owner    string `yaml:"owner"`
+	DumpPath string `yaml:"dump_path"`
+	Restore  bool   `yaml:"restore"`
+}
+type RecoveryApplication struct {
+	Name         string              `yaml:"name"`
+	Path         string              `yaml:"path"`
+	Owner        string              `yaml:"owner"`
+	Type         string              `yaml:"type"`
+	Service      string              `yaml:"service"`
+	Dependencies []string            `yaml:"dependencies"`
+	Build        []string            `yaml:"build"`
+	Start        []string            `yaml:"start"`
+	Healthcheck  RecoveryHealthcheck `yaml:"healthcheck"`
+}
+type RecoveryHealthcheck struct {
+	URL string `yaml:"url"`
+}
+type RecoveryServices struct {
+	Enable []string `yaml:"enable"`
+	Start  []string `yaml:"start"`
+}
+type RecoveryDownload struct {
+	Name      string `yaml:"name"`
+	URL       string `yaml:"url"`
+	SHA256    string `yaml:"sha256"`
+	InstallTo string `yaml:"install_to"`
+	Mode      string `yaml:"mode"`
+}
+
+type RecoveryPlan struct {
+	Configured bool
+	Packages   int
+	Users      int
+	Downloads  int
+}
+
+func recoveryConfigured(r RecoveryConfig) bool {
+	return len(r.Packages.Apt) > 0 || len(r.Runtimes) > 0 || len(r.Users) > 0 || len(r.Directories) > 0 ||
+		len(r.Restore.Include) > 0 || len(r.Restore.Exclude) > 0 || r.Restore.Staging != "" ||
+		len(r.Databases) > 0 || len(r.Applications) > 0 || len(r.Services.Enable) > 0 || len(r.Services.Start) > 0 || len(r.Downloads) > 0
+}
+
+func validateRecovery(r RecoveryConfig) error {
+	for _, user := range r.Users {
+		if user.Name == "" || user.Home == "" || !filepath.IsAbs(user.Home) {
+			return errors.New("recovery user name and absolute home are required")
+		}
+	}
+	for _, dir := range r.Directories {
+		if dir.Path == "" || !filepath.IsAbs(dir.Path) {
+			return errors.New("recovery directory paths must be absolute")
+		}
+	}
+	if r.Restore.Staging != "" && !filepath.IsAbs(r.Restore.Staging) {
+		return errors.New("recovery.restore.staging must be absolute")
+	}
+	for _, path := range append(append([]string{}, r.Restore.Include...), r.Restore.Exclude...) {
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf("recovery restore path must be absolute: %s", path)
+		}
+	}
+	for _, download := range r.Downloads {
+		u, err := url.Parse(download.URL)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("recovery download %s must use an https URL", download.Name)
+		}
+		if len(download.SHA256) != 64 {
+			return fmt.Errorf("recovery download %s requires a 64-character SHA-256", download.Name)
+		}
+		if _, err := hex.DecodeString(download.SHA256); err != nil {
+			return fmt.Errorf("recovery download %s has an invalid SHA-256", download.Name)
+		}
+		if download.InstallTo == "" || !filepath.IsAbs(download.InstallTo) {
+			return fmt.Errorf("recovery download %s install_to must be absolute", download.Name)
+		}
+	}
+	return nil
+}
+
+func recoveryPlan(c Config) RecoveryPlan {
+	return RecoveryPlan{
+		Configured: recoveryConfigured(c.Recovery),
+		Packages:   len(c.Recovery.Packages.Apt), Users: len(c.Recovery.Users), Downloads: len(c.Recovery.Downloads),
+	}
+}
+
 type RepositoryConfig struct {
 	Name         string `yaml:"name"`
 	URL          string `yaml:"url"`
@@ -95,8 +228,14 @@ func loadConfig(path string) (Config, error) {
 	if err := decoder.Decode(&c); err != nil {
 		return c, fmt.Errorf("invalid config: %w", err)
 	}
-	if c.Version != 1 && c.Version != 2 {
-		return c, fmt.Errorf("unsupported config version %d (expected 1 or 2)", c.Version)
+	if c.Version < 1 || c.Version > 3 {
+		return c, fmt.Errorf("unsupported config version %d (expected 1, 2, or 3)", c.Version)
+	}
+	if c.Version < 3 && recoveryConfigured(c.Recovery) {
+		return c, errors.New("recovery requires config version 3")
+	}
+	if err := validateRecovery(c.Recovery); err != nil {
+		return c, err
 	}
 	if len(c.Repositories) == 0 && c.Repository.URL != "" {
 		c.Repositories = []RepositoryConfig{{Name: "default", URL: c.Repository.URL, PasswordFile: c.Repository.PasswordFile}}
@@ -389,7 +528,7 @@ func retentionArgs(args []string) (string, bool, error) {
 	return selector, prune, nil
 }
 
-var commands = []string{"install", "version", "config-check", "repositories", "init", "backup", "snapshots", "verify", "retention", "restore", "schedule"}
+var commands = []string{"install", "version", "config-check", "repositories", "init", "backup", "snapshots", "verify", "retention", "restore", "recovery", "schedule"}
 
 const (
 	systemdDir      = "/etc/systemd/system"
@@ -613,6 +752,9 @@ func printHelp(command string) {
 	case "restore":
 		fmt.Println("Restore a snapshot into a new or empty absolute directory.")
 		fmt.Println("\nUSAGE\n  backup-system restore [--repository name] <snapshot|latest> <absolute-target>")
+	case "recovery":
+		fmt.Println("Show a read-only recovery plan from config.yml.")
+		fmt.Println("\nUSAGE\n  backup-system recovery plan")
 	case "schedule":
 		fmt.Println("Manage the systemd timer that runs backup-system backup.")
 		fmt.Println("\nUSAGE\n  backup-system schedule <render|install|status|remove>")
@@ -657,6 +799,20 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func printRecoveryPlan(c Config) {
+	p := recoveryPlan(c)
+	fmt.Println("Recovery plan (read-only)")
+	if !p.Configured {
+		fmt.Println("  recovery: not configured")
+		return
+	}
+	fmt.Printf("  apt packages: %d\n", p.Packages)
+	fmt.Printf("  users: %d\n", p.Users)
+	fmt.Printf("  downloads: %d\n", p.Downloads)
+	fmt.Printf("  restore staging: %s\n", c.Recovery.Restore.Staging)
+	fmt.Println("  no changes made")
 }
 
 func usage() { printHelp("") }
@@ -785,6 +941,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-system:", err)
 		os.Exit(1)
+	}
+	if command == "recovery" {
+		if len(args) != 2 || args[1] != "plan" {
+			fmt.Fprintln(os.Stderr, "backup-system: usage: recovery plan")
+			os.Exit(2)
+		}
+		printRecoveryPlan(c)
+		return
 	}
 	a := &app{cfg: c}
 	lockPath := filepath.Join(filepath.Dir(configPath), ".lock")

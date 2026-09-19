@@ -65,8 +65,32 @@ func TestAcquireLockConflicts(t *testing.T) {
 	}
 }
 
+func TestRecoveryValidation(t *testing.T) {
+	if err := validateRecovery(RecoveryConfig{Downloads: []RecoveryDownload{{Name: "bad", URL: "http://example.com/file", SHA256: strings.Repeat("a", 64), InstallTo: "/usr/local/bin/file"}}}); err == nil {
+		t.Fatal("expected https validation")
+	}
+	if err := validateRecovery(RecoveryConfig{Downloads: []RecoveryDownload{{Name: "bad", URL: "https://example.com/file", SHA256: "bad", InstallTo: "/usr/local/bin/file"}}}); err == nil {
+		t.Fatal("expected checksum validation")
+	}
+	if recoveryConfigured(RecoveryConfig{Applications: []RecoveryApplication{{Name: "api"}}}) != true {
+		t.Fatal("application recovery should be configured")
+	}
+}
+
+func TestRecoveryPlan(t *testing.T) {
+	c := Config{Recovery: RecoveryConfig{
+		Packages:  RecoveryPackages{Apt: []string{"nginx"}},
+		Users:     []RecoveryUser{{Name: "deploy"}},
+		Downloads: []RecoveryDownload{{Name: "restic", URL: "https://example.com/restic", SHA256: strings.Repeat("a", 64), InstallTo: "/usr/local/bin/restic"}},
+	}}
+	plan := recoveryPlan(c)
+	if !plan.Configured || plan.Packages != 1 || plan.Users != 1 || plan.Downloads != 1 {
+		t.Fatalf("unexpected recovery plan: %#v", plan)
+	}
+}
+
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.3.0" {
+	if version != "0.4.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
