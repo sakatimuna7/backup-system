@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version       = "0.4.1"
+	version       = "0.5.0"
 	resticTimeout = 12 * time.Hour
 )
 

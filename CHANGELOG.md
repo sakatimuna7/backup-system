@@ -1,0 +1,59 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+## [0.5.0] - 2026-09-19
+
+### Added
+- `recovery plan` — read-only preview of recovery manifest (packages, users, downloads, staging path)
+- `recovery check` — validate staging directory, repository access, and dependencies before restore
+- `recovery run` — non-destructive restore to staging directory (minimal MVP)
+- Recovery manifest schema in `config.yml` with typed fields: packages, users, directories, downloads, databases, applications, services
+
+### What's Included
+- Restic-based encrypted snapshots, deduplication, and retention
+- Multi-repository support (local, SFTP, S3-compatible, Google Drive via rclone)
+- Systemd timer scheduling with jitter and missed-run recovery
+- Configuration validation and actionable error messages
+- Dry-run and verification modes
+
+### What's Not Included
+- Database dump orchestration (use pre-backup hooks)
+- Application build or deployment (milestone 5+)
+- Package installation or user creation (milestone 5+)
+- Service restart or health checks (milestone 6+)
+
+## [0.4.1] - 2026-09-19
+
+### Fixed
+- Schedule subcommands (`render`, `install`, `status`) no longer incorrectly parsed as repository selectors
+
+## [0.4.0] - 2026-09-19
+
+### Added
+- Recovery manifest schema (YAML) with optional recovery configuration
+- `recovery plan` command — read-only display of recovery manifest
+
+## [0.3.0] - 2026-09-18
+
+### Added
+- Multi-repository support with required/optional policy
+- rclone backend integration for Google Drive, S3, and other cloud storage
+
+## [0.2.0] - 2026-09-17
+
+### Added
+- Systemd timer scheduling: `schedule render`, `schedule install`, `schedule status`
+
+## [0.1.1] - 2026-09-16
+
+### Added
+- Help text and command suggestions for typos
+
+## [0.1.0] - 2026-09-15
+
+### Added
+- Initial MVP: backup, snapshots, verify, restore
+- Single-repository restic wrapper
+- Config YAML with backup paths, exclusions, retention policy
+- Password file (mode 600) separate from config

@@ -14,8 +14,8 @@ Small, auditable VPS backup agent. It keeps the user interface simple and delega
 Download the binary for Linux and verify its checksum:
 
 ```sh
-curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.2.0/backup-system-linux-amd64
-curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.2.0/SHA256SUMS
+curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.5.0/backup-system-linux-amd64
+curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.5.0/SHA256SUMS
 sha256sum --check SHA256SUMS
 sudo install -m 755 backup-system-linux-amd64 /usr/local/bin/backup-system
 ```
@@ -85,6 +85,8 @@ backup-system schedule render
 backup-system schedule install
 backup-system schedule status
 backup-system recovery plan
+backup-system recovery check
+backup-system recovery run
 ```
 
 For Google Drive or another rclone backend, configure OAuth with `rclone config`, copy its config to `/etc/backup-system/rclone.conf` with mode `600`, then set `url: "rclone:gdrive:backup-system/vps-01"` and `rclone_config` in the repository entry. The wrapper passes `RCLONE_CONFIG` only to that repository operation; OAuth tokens never belong in `config.yml`.
@@ -135,12 +137,27 @@ The agent intentionally does not implement its own storage format, encryption, d
 
 A full recovery checklist is available in [`RECOVERY.md`](RECOVERY.md). Always restore to a temporary target first, verify content, then selectively copy to live paths.
 
-Quick recovery flow:
+**Recovery workflow** (optional manifest for orchestrated recovery):
+
+```sh
+# 1. Preview the recovery plan (read-only, no changes)
+backup-system recovery plan
+
+# 2. Validate dependencies before staging restore
+backup-system recovery check
+
+# 3. Restore to staging directory (non-destructive)
+backup-system recovery run
+```
+
+Quick manual recovery flow:
 
 ```sh
 backup-system snapshots
 backup-system restore latest /tmp/server-restore
 ```
+
+The recovery manifest in `config.yml` under `recovery:` is optional and used only by these commands. `recovery plan` shows what would be restored; `recovery check` validates the staging path and repository; `recovery run` restores the snapshot to the staging directory without modifying the live system.
 
 The repository password is required; losing it makes the encrypted repository unusable.
 
