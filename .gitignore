@@ -1,3 +1,4 @@
 backup-system
+dist/
 *.local.yml
 .lock
