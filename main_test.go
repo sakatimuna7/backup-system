@@ -250,6 +250,24 @@ func TestRestoreArgsAndEnv(t *testing.T) {
 	}
 }
 
+func TestRecoveryRunStaging(t *testing.T) {
+	d := t.TempDir()
+	pw := filepath.Join(d, "password")
+	if err := os.WriteFile(pw, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(d, "config.yml")
+	data := []byte("version: 3\nrepositories:\n  - name: local\n    url: local:" + d + "/repo\n    password_file: " + pw + "\nbackup:\n  paths: [/etc]\nrecovery:\n  restore:\n    staging: " + d + "/staging\n")
+	if err := os.WriteFile(cfg, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := loadConfig(cfg)
+	errs := recoveryRun(c, true)
+	if len(errs) == 0 {
+		t.Fatal("expected staging restore error")
+	}
+}
+
 func TestRepositorySelector(t *testing.T) {
 	c := Config{Repositories: []RepositoryConfig{{Name: "local"}, {Name: "remote"}}}
 	if got, err := selectRepositories(c, "remote"); err != nil || len(got) != 1 || got[0].Name != "remote" {

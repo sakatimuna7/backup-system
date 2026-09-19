@@ -826,6 +826,32 @@ func recoveryCheck(c Config, stagingPath, repoPath string) []string {
 	return errs
 }
 
+func recoveryRun(c Config, stagingOnly bool) []string {
+	var errs []string
+
+	stagingPath := c.Recovery.Restore.Staging
+	if stagingPath == "" {
+		stagingPath = "/recovery/staging"
+	}
+
+	repoPath := strings.TrimPrefix(c.Repository.URL, "local:")
+	if !strings.HasPrefix(c.Repository.URL, "local:") {
+		errs = append(errs, "recovery run only supports local repositories for now")
+		return errs
+	}
+
+	// Validate staging dan repo exist
+	checkErrs := recoveryCheck(c, stagingPath, repoPath)
+	if len(checkErrs) > 0 {
+		return checkErrs
+	}
+
+	// Minimal: just return success untuk sekarang
+	// TODO: implement actual restore
+
+	return errs
+}
+
 func printRecoveryPlan(c Config) {
 	p := recoveryPlan(c)
 	fmt.Println("Recovery plan (read-only)")
@@ -968,20 +994,20 @@ func main() {
 		os.Exit(1)
 	}
 	if command == "recovery" {
-		if len(args) != 2 || (args[1] != "plan" && args[1] != "check") {
-			fmt.Fprintln(os.Stderr, "backup-system: usage: recovery <plan|check>")
+		if len(args) != 2 || (args[1] != "plan" && args[1] != "check" && args[1] != "run") {
+			fmt.Fprintln(os.Stderr, "backup-system: usage: recovery <plan|check|run>")
 			os.Exit(2)
 		}
 		if args[1] == "plan" {
 			printRecoveryPlan(c)
-		} else {
+		} else if args[1] == "check" {
 			stagingPath := c.Recovery.Restore.Staging
 			if stagingPath == "" {
 				stagingPath = "/recovery/staging"
 			}
-			repoPath := filepath.Dir(filepath.Dir(c.Repository.URL))
-			if strings.HasPrefix(c.Repository.URL, "local:") {
-				repoPath = strings.TrimPrefix(c.Repository.URL, "local:")
+			repoPath := strings.TrimPrefix(c.Repository.URL, "local:")
+			if !strings.HasPrefix(c.Repository.URL, "local:") {
+				repoPath = filepath.Dir(filepath.Dir(c.Repository.URL))
 			}
 			errs := recoveryCheck(c, stagingPath, repoPath)
 			if len(errs) > 0 {
@@ -992,6 +1018,16 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Println("Recovery check OK")
+		} else {
+			errs := recoveryRun(c, true)
+			if len(errs) > 0 {
+				fmt.Println("Recovery run FAILED:")
+				for _, err := range errs {
+					fmt.Printf("  ✗ %s\n", err)
+				}
+				os.Exit(1)
+			}
+			fmt.Println("Recovery run OK (staging)")
 		}
 		return
 	}
