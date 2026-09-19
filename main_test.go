@@ -122,7 +122,7 @@ func TestRecoveryPlan(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.5.0" {
+	if version != "0.6.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -292,5 +292,17 @@ func TestValidateRestoreTarget(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "new")
 	if err := validateRestoreTarget(missing); err != nil {
 		t.Fatalf("expected missing target to be accepted: %v", err)
+	}
+}
+
+func TestRecoveryDatabaseValidation(t *testing.T) {
+	if err := validateRecovery(RecoveryConfig{Databases: []RecoveryDatabase{{Name: "db", Engine: "unknown", DumpPath: "/tmp/dump.sql"}}}); err == nil {
+		t.Fatal("expected unknown engine rejection")
+	}
+	if err := validateRecovery(RecoveryConfig{Databases: []RecoveryDatabase{{Name: "db", Engine: "postgresql", DumpPath: "relative.sql"}}}); err == nil {
+		t.Fatal("expected relative dump path rejection")
+	}
+	if err := validateRecovery(RecoveryConfig{Databases: []RecoveryDatabase{{Name: "db", Engine: "postgresql", DumpPath: "/tmp/dump.sql", Database: ""}}}); err == nil {
+		t.Fatal("expected empty database name rejection")
 	}
 }

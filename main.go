@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version       = "0.5.0"
+	version       = "0.6.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -119,6 +119,7 @@ type RecoveryPlan struct {
 	Configured bool
 	Packages   int
 	Users      int
+	Databases  int
 	Downloads  int
 }
 
@@ -147,6 +148,17 @@ func validateRecovery(r RecoveryConfig) error {
 			return fmt.Errorf("recovery restore path must be absolute: %s", path)
 		}
 	}
+	for _, db := range r.Databases {
+		if db.Engine != "postgresql" && db.Engine != "mysql" {
+			return fmt.Errorf("recovery database %s engine must be postgresql or mysql", db.Name)
+		}
+		if db.Database == "" {
+			return fmt.Errorf("recovery database %s requires database name", db.Name)
+		}
+		if db.DumpPath == "" || !filepath.IsAbs(db.DumpPath) {
+			return fmt.Errorf("recovery database %s dump_path must be absolute", db.Name)
+		}
+	}
 	for _, download := range r.Downloads {
 		u, err := url.Parse(download.URL)
 		if err != nil || u.Scheme != "https" || u.Host == "" {
@@ -168,7 +180,7 @@ func validateRecovery(r RecoveryConfig) error {
 func recoveryPlan(c Config) RecoveryPlan {
 	return RecoveryPlan{
 		Configured: recoveryConfigured(c.Recovery),
-		Packages:   len(c.Recovery.Packages.Apt), Users: len(c.Recovery.Users), Downloads: len(c.Recovery.Downloads),
+		Packages:   len(c.Recovery.Packages.Apt), Users: len(c.Recovery.Users), Databases: len(c.Recovery.Databases), Downloads: len(c.Recovery.Downloads),
 	}
 }
 
@@ -846,10 +858,61 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 		return checkErrs
 	}
 
-	// Minimal: just return success untuk sekarang
-	// TODO: implement actual restore
+	// Restore databases yang ada di staging
+	for _, db := range c.Recovery.Databases {
+		if !db.Restore {
+			continue
+		}
+		dumpPath := filepath.Join(stagingPath, strings.TrimPrefix(db.DumpPath, "/"))
+		if _, err := os.Stat(dumpPath); err != nil {
+			errs = append(errs, fmt.Sprintf("database %s dump not found: %s", db.Name, dumpPath))
+			continue
+		}
+		
+		if err := restoreDatabase(db, dumpPath); err != nil {
+			errs = append(errs, fmt.Sprintf("database %s restore failed: %v", db.Name, err))
+		}
+	}
 
 	return errs
+}
+
+func restoreDatabase(db RecoveryDatabase, dumpPath string) error {
+	switch db.Engine {
+	case "postgresql":
+		return restorePostgreSQL(db, dumpPath)
+	case "mysql":
+		return restoreMySQL(db, dumpPath)
+	default:
+		return fmt.Errorf("unsupported engine: %s", db.Engine)
+	}
+}
+
+func restorePostgreSQL(db RecoveryDatabase, dumpPath string) error {
+	args := []string{"-U", db.Owner, "-d", db.Database, "-f", dumpPath}
+	cmd := exec.Command("psql", args...)
+	cmd.Env = append(os.Environ(), "PGPASSWORD=") // ponytail: no password prompt in MVP
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("psql failed: %w (output: %s)", err, string(out))
+	}
+	return nil
+}
+
+func restoreMySQL(db RecoveryDatabase, dumpPath string) error {
+	args := []string{"-u", db.Owner, db.Database}
+	cmd := exec.Command("mysql", args...)
+	dump, err := os.Open(dumpPath)
+	if err != nil {
+		return err
+	}
+	defer dump.Close()
+	cmd.Stdin = dump
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mysql failed: %w (output: %s)", err, string(out))
+	}
+	return nil
 }
 
 func printRecoveryPlan(c Config) {
@@ -861,6 +924,7 @@ func printRecoveryPlan(c Config) {
 	}
 	fmt.Printf("  apt packages: %d\n", p.Packages)
 	fmt.Printf("  users: %d\n", p.Users)
+	fmt.Printf("  databases: %d\n", p.Databases)
 	fmt.Printf("  downloads: %d\n", p.Downloads)
 	fmt.Printf("  restore staging: %s\n", c.Recovery.Restore.Staging)
 	fmt.Println("  no changes made")

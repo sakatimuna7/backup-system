@@ -66,6 +66,13 @@ recovery:
       - "/etc/shadow"
       - "/etc/ssh"
       - "/home/deploy/.ssh"
+  databases:
+    - name: production
+      engine: "postgresql"
+      database: "myapp"
+      owner: "postgres"
+      dump_path: "/var/backups/postgresql/myapp.sql"
+      restore: true
   downloads:
     - name: custom-cli
       url: "https://downloads.example.com/custom-cli-linux-amd64"

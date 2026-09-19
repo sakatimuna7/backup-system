@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [0.6.0] - 2026-09-19
+
+### Added
+- Database restore support for PostgreSQL and MySQL
+- `recovery run` now restores database dumps from staging
+- Database validation: engine (postgresql/mysql), absolute dump paths, required fields
+- Recovery plan shows database count
+
+### Changed
+- `RecoveryDatabase.restore` field controls whether database is restored
+- Database dumps read from staging directory (e.g., `/recovery/staging/var/backups/postgresql/myapp.sql`)
+
 ## [0.5.0] - 2026-09-19
 
 ### Added
