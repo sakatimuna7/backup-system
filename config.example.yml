@@ -1,0 +1,29 @@
+version: 1
+
+repository:
+  url: "sftp:backup@example.com:/srv/restic/vps-01"
+  password_file: "/etc/backup-system/password"
+
+backup:
+  paths:
+    - "/etc"
+    - "/home"
+  exclude:
+    - "/proc"
+    - "/sys"
+    - "/dev"
+    - "/run"
+    - "/tmp"
+    - "/var/cache"
+    - "/var/tmp"
+    - "/mnt"
+    - "/media"
+
+retention:
+  daily: 14
+  weekly: 8
+  monthly: 6
+  prune: false
+
+verify:
+  after_backup: true

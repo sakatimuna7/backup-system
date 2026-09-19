@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install restic
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq restic
+          restic version
+
+      - name: Format check
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Files need formatting:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Build
+        run: go build -o backup-system .
+
+      - name: Unit tests
+        run: go test -v ./...
+
+      - name: E2E sandbox test
+        run: |
+          set -e
+          tmp=$(mktemp -d)
+          repo="$tmp/repo"
+          mkdir -p "$repo"
+          mkdir -p "$tmp/data"
+          echo "hello-$(date +%s)" > "$tmp/data/file.txt"
+          echo "ignored" > "$tmp/data/ignore"
+          echo "secret" > "$tmp/password"
+          chmod 600 "$tmp/password"
+
+          cat > "$tmp/config.yml" <<YAML
+          version: 1
+          repository:
+            url: "local:$repo"
+            password_file: "$tmp/password"
+          backup:
+            paths: ["$tmp/data"]
+            exclude: ["$tmp/data/ignore"]
+          retention:
+            daily: 1
+            weekly: 1
+            monthly: 1
+            prune: false
+          verify:
+            after_backup: false
+          YAML
+
+          ./backup-system -config "$tmp/config.yml" init
+          ./backup-system -config "$tmp/config.yml" backup
+          ./backup-system -config "$tmp/config.yml" snapshots
+          ./backup-system -config "$tmp/config.yml" restore latest "$tmp/restore"
+          test -f "$tmp/restore$tmp/data/file.txt"
+          ./backup-system -config "$tmp/config.yml" retention --dry-run
+
+          echo "E2E: PASS"
