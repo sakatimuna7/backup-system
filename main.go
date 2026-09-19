@@ -882,7 +882,7 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 			errs = append(errs, fmt.Sprintf("database %s dump not found: %s", db.Name, dumpPath))
 			continue
 		}
-		
+
 		if err := restoreDatabase(db, dumpPath); err != nil {
 			errs = append(errs, fmt.Sprintf("database %s restore failed: %v", db.Name, err))
 		}
