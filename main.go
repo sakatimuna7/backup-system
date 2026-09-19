@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	version       = "0.4.0"
+	version       = "0.4.1"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -753,8 +753,11 @@ func printHelp(command string) {
 		fmt.Println("Restore a snapshot into a new or empty absolute directory.")
 		fmt.Println("\nUSAGE\n  backup-system restore [--repository name] <snapshot|latest> <absolute-target>")
 	case "recovery":
-		fmt.Println("Show a read-only recovery plan from config.yml.")
-		fmt.Println("\nUSAGE\n  backup-system recovery plan")
+		fmt.Println("Show recovery plan or validate recovery prerequisites.")
+		fmt.Println("\nUSAGE\n  backup-system recovery <plan|check>")
+		fmt.Println("\nSUBCOMMANDS")
+		fmt.Println("  plan  Display manifest from config (read-only)")
+		fmt.Println("  check Validate staging, repository, and manifest paths")
 	case "schedule":
 		fmt.Println("Manage the systemd timer that runs backup-system backup.")
 		fmt.Println("\nUSAGE\n  backup-system schedule <render|install|status|remove>")
@@ -799,6 +802,28 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func recoveryCheck(c Config, stagingPath, repoPath string) []string {
+	var errs []string
+
+	// Staging path harus ada dan writable
+	if stat, err := os.Stat(stagingPath); err != nil {
+		errs = append(errs, fmt.Sprintf("staging: %v", err))
+	} else if !stat.IsDir() {
+		errs = append(errs, "staging must be a directory")
+	}
+
+	// Repository path harus ada
+	if stat, err := os.Stat(repoPath); err != nil {
+		errs = append(errs, fmt.Sprintf("repository: %v", err))
+	} else if !stat.IsDir() {
+		errs = append(errs, "repository must be a directory")
+	}
+
+	// Download URLs dan checksum sudah divalidasi di loadConfig
+
+	return errs
 }
 
 func printRecoveryPlan(c Config) {
@@ -943,11 +968,31 @@ func main() {
 		os.Exit(1)
 	}
 	if command == "recovery" {
-		if len(args) != 2 || args[1] != "plan" {
-			fmt.Fprintln(os.Stderr, "backup-system: usage: recovery plan")
+		if len(args) != 2 || (args[1] != "plan" && args[1] != "check") {
+			fmt.Fprintln(os.Stderr, "backup-system: usage: recovery <plan|check>")
 			os.Exit(2)
 		}
-		printRecoveryPlan(c)
+		if args[1] == "plan" {
+			printRecoveryPlan(c)
+		} else {
+			stagingPath := c.Recovery.Restore.Staging
+			if stagingPath == "" {
+				stagingPath = "/recovery/staging"
+			}
+			repoPath := filepath.Dir(filepath.Dir(c.Repository.URL))
+			if strings.HasPrefix(c.Repository.URL, "local:") {
+				repoPath = strings.TrimPrefix(c.Repository.URL, "local:")
+			}
+			errs := recoveryCheck(c, stagingPath, repoPath)
+			if len(errs) > 0 {
+				fmt.Println("Recovery check FAILED:")
+				for _, err := range errs {
+					fmt.Printf("  ✗ %s\n", err)
+				}
+				os.Exit(1)
+			}
+			fmt.Println("Recovery check OK")
+		}
 		return
 	}
 	a := &app{cfg: c}

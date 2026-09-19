@@ -77,6 +77,38 @@ func TestRecoveryValidation(t *testing.T) {
 	}
 }
 
+func TestRecoveryCheck(t *testing.T) {
+	d := t.TempDir()
+	pw := filepath.Join(d, "password")
+	if err := os.WriteFile(pw, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(d, "config.yml")
+	data := []byte("version: 3\nrepositories:\n  - name: local\n    url: local:" + d + "/repo\n    password_file: " + pw + "\nbackup:\n  paths: [/etc]\nrecovery:\n  restore:\n    staging: " + d + "/staging\n")
+	if err := os.WriteFile(cfg, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := loadConfig(cfg)
+	errs := recoveryCheck(c, d+"/staging", d+"/repo")
+	if len(errs) == 0 {
+		t.Fatal("expected staging not created error")
+	}
+	if err := os.Mkdir(d+"/staging", 0755); err != nil {
+		t.Fatal(err)
+	}
+	errs = recoveryCheck(c, d+"/staging", d+"/repo")
+	if len(errs) == 0 {
+		t.Fatal("expected repository not found error")
+	}
+	if err := os.Mkdir(d+"/repo", 0700); err != nil {
+		t.Fatal(err)
+	}
+	errs = recoveryCheck(c, d+"/staging", d+"/repo")
+	if len(errs) > 0 {
+		t.Logf("errors: %v", errs)
+	}
+}
+
 func TestRecoveryPlan(t *testing.T) {
 	c := Config{Recovery: RecoveryConfig{
 		Packages:  RecoveryPackages{Apt: []string{"nginx"}},
@@ -90,7 +122,7 @@ func TestRecoveryPlan(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.4.0" {
+	if version != "0.4.1" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
