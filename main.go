@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version       = "0.1.1"
+	version       = "0.2.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -36,6 +36,7 @@ type Config struct {
 	Backup     BackupConfig     `yaml:"backup"`
 	Retention  RetentionConfig  `yaml:"retention"`
 	Verify     VerifyConfig     `yaml:"verify"`
+	Schedule   ScheduleConfig   `yaml:"schedule"`
 }
 type RepositoryConfig struct {
 	URL          string `yaml:"url"`
@@ -53,6 +54,12 @@ type RetentionConfig struct {
 }
 type VerifyConfig struct {
 	AfterBackup bool `yaml:"after_backup"`
+}
+type ScheduleConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	OnCalendar      string `yaml:"on_calendar"`
+	Persistent      bool   `yaml:"persistent"`
+	RandomizedDelay string `yaml:"randomized_delay"`
 }
 
 type app struct {
@@ -93,6 +100,19 @@ func loadConfig(path string) (Config, error) {
 	}
 	if c.Retention.Daily < 0 || c.Retention.Weekly < 0 || c.Retention.Monthly < 0 {
 		return c, errors.New("retention values cannot be negative")
+	}
+	if c.Schedule.Enabled && strings.TrimSpace(c.Schedule.OnCalendar) == "" {
+		return c, errors.New("schedule.on_calendar is required when schedule.enabled is true")
+	}
+	if c.Schedule.Enabled {
+		if err := validateCalendar(c.Schedule.OnCalendar); err != nil {
+			return c, err
+		}
+	}
+	if c.Schedule.RandomizedDelay != "" {
+		if d, err := time.ParseDuration(c.Schedule.RandomizedDelay); err != nil || d < 0 {
+			return c, errors.New("schedule.randomized_delay must be a non-negative duration, e.g. 15m")
+		}
 	}
 	lst, err := os.Lstat(c.Repository.PasswordFile)
 	if err != nil {
@@ -193,7 +213,169 @@ func (a *app) retention(prune bool) error {
 	return a.run(args...)
 }
 
-var commands = []string{"install", "version", "config-check", "init", "backup", "snapshots", "verify", "retention", "restore"}
+var commands = []string{"install", "version", "config-check", "init", "backup", "snapshots", "verify", "retention", "restore", "schedule"}
+
+const (
+	systemdDir      = "/etc/systemd/system"
+	serviceUnitName = "backup-system.service"
+	timerUnitName   = "backup-system.timer"
+)
+
+func systemdArg(value string) string {
+	value = strings.ReplaceAll(value, `%`, `%%`)
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return `"` + value + `"`
+}
+
+func serviceUnit(configPath, binaryPath string) string {
+	return fmt.Sprintf(`[Unit]
+Description=backup-system scheduled backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%s -config %s backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+`, systemdArg(binaryPath), systemdArg(configPath))
+}
+
+func validateCalendar(calendar string) error {
+	cmd := exec.Command("systemd-analyze", "calendar", calendar)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("invalid schedule.on_calendar %q: %s", calendar, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func timerUnit(c ScheduleConfig) string {
+	persistent := "false"
+	if c.Persistent {
+		persistent = "true"
+	}
+	unit := fmt.Sprintf(`[Unit]
+Description=Run backup-system scheduled backup
+
+[Timer]
+OnCalendar=%s
+Persistent=%s
+Unit=%s`, c.OnCalendar, persistent, serviceUnitName)
+	if c.RandomizedDelay != "" {
+		unit += "\nRandomizedDelaySec=" + c.RandomizedDelay
+	}
+	return unit + "\n\n[Install]\nWantedBy=timers.target\n"
+}
+
+func writeUnit(path, content string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".backup-system-unit-*")
+	if err != nil {
+		return fmt.Errorf("create temporary unit: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set unit permissions: %w", err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary unit: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("install %s: %w", path, err)
+	}
+	return nil
+}
+
+func executablePath() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("find backup-system executable: %w", err)
+	}
+	return filepath.Abs(path)
+}
+
+func systemctl(args ...string) error {
+	cmd := exec.Command("systemctl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+func scheduleStatus() error {
+	cmd := exec.Command("systemctl", "show", timerUnitName, "--no-pager", "--property=LoadState,ActiveState,UnitFileState,NextElapseUSecRealtime,LastTriggerUSec")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl show %s: %w", timerUnitName, err)
+	}
+	if strings.Contains(string(output), "LoadState=not-found") {
+		fmt.Printf("schedule: not installed\ntimer: %s\n", timerUnitName)
+		return nil
+	}
+	fmt.Printf("schedule: %s\n%s", timerUnitName, output)
+	return nil
+}
+
+func scheduleInstall(c Config, configPath string) error {
+	if !c.Schedule.Enabled {
+		return errors.New("schedule is disabled in config.yml")
+	}
+	if err := validateCalendar(c.Schedule.OnCalendar); err != nil {
+		return err
+	}
+	binaryPath, err := executablePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(systemdDir, 0o755); err != nil {
+		return fmt.Errorf("create systemd unit directory: %w", err)
+	}
+	if err := writeUnit(filepath.Join(systemdDir, serviceUnitName), serviceUnit(configPath, binaryPath)); err != nil {
+		return err
+	}
+	if err := writeUnit(filepath.Join(systemdDir, timerUnitName), timerUnit(c.Schedule)); err != nil {
+		return err
+	}
+	if err := systemctl("daemon-reload"); err != nil {
+		return err
+	}
+	if err := systemctl("enable", "--now", timerUnitName); err != nil {
+		return err
+	}
+	fmt.Printf("schedule: installed\ntimer: %s\ncalendar: %s\n", timerUnitName, c.Schedule.OnCalendar)
+	return nil
+}
+
+func scheduleRemove() error {
+	servicePath := filepath.Join(systemdDir, serviceUnitName)
+	timerPath := filepath.Join(systemdDir, timerUnitName)
+	serviceExists := !errors.Is(func() error { _, err := os.Stat(servicePath); return err }(), os.ErrNotExist)
+	timerExists := !errors.Is(func() error { _, err := os.Stat(timerPath); return err }(), os.ErrNotExist)
+	if !serviceExists && !timerExists {
+		fmt.Println("schedule: not installed")
+		return nil
+	}
+	if err := systemctl("disable", "--now", timerUnitName); err != nil {
+		return err
+	}
+	for _, name := range []string{serviceUnitName, timerUnitName} {
+		if err := os.Remove(filepath.Join(systemdDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", name, err)
+		}
+	}
+	return systemctl("daemon-reload")
+}
 
 func printHelp(command string) {
 	if command == "" {
@@ -212,6 +394,13 @@ func printHelp(command string) {
 		fmt.Println("  verify:        Check repository integrity")
 		fmt.Println("  retention:     Preview or prune old snapshots")
 		fmt.Println("  restore:       Restore a snapshot to an empty directory")
+		fmt.Println("  schedule:      Install, inspect, or remove the backup timer")
+		fmt.Println()
+		fmt.Println("SCHEDULE COMMANDS")
+		fmt.Println("  backup-system schedule render")
+		fmt.Println("  backup-system schedule install")
+		fmt.Println("  backup-system schedule status")
+		fmt.Println("  backup-system schedule remove")
 		fmt.Println()
 		fmt.Println("FLAGS")
 		fmt.Println("  -config path   Use a config file other than /etc/backup-system/config.yml")
@@ -248,6 +437,9 @@ func printHelp(command string) {
 	case "restore":
 		fmt.Println("Restore a snapshot into a new or empty absolute directory.")
 		fmt.Println("\nUSAGE\n  backup-system restore <snapshot|latest> <absolute-target>")
+	case "schedule":
+		fmt.Println("Manage the systemd timer that runs backup-system backup.")
+		fmt.Println("\nUSAGE\n  backup-system schedule <render|install|status|remove>")
 	}
 	fmt.Println("\nUse 'backup-system --help' for the full command list.")
 }
@@ -315,6 +507,7 @@ func install(configPath string) error {
 			Backup:     BackupConfig{Paths: []string{"/etc", "/home"}, Exclude: []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/var/cache", "/var/tmp", "/mnt", "/media"}},
 			Retention:  RetentionConfig{Daily: 14, Weekly: 8, Monthly: 6, Prune: false},
 			Verify:     VerifyConfig{AfterBackup: true},
+			Schedule:   ScheduleConfig{Enabled: true, OnCalendar: "*-*-* 02:00:00", Persistent: true, RandomizedDelay: "15m"},
 		}
 		data, err := yaml.Marshal(example)
 		if err != nil {
@@ -335,6 +528,9 @@ func main() {
 	if len(args) >= 2 && args[0] == "-config" {
 		configPath = args[1]
 		args = args[2:]
+	}
+	if absolute, err := filepath.Abs(configPath); err == nil {
+		configPath = absolute
 	}
 	if len(args) == 0 || args[0] == "--help" || args[0] == "help" {
 		if len(args) > 1 {
@@ -382,6 +578,19 @@ func main() {
 		}
 		fmt.Println("config: OK")
 		fmt.Printf("restic: OK (%s)\n", restic)
+		return
+	}
+	if command == "schedule" && len(args) == 2 && (args[1] == "status" || args[1] == "remove") {
+		var err error
+		if args[1] == "status" {
+			err = scheduleStatus()
+		} else {
+			err = scheduleRemove()
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "backup-system:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	c, err := loadConfig(configPath)
@@ -440,6 +649,34 @@ func main() {
 			err = errors.New("restore target must be absolute")
 		} else if err = validateRestoreTarget(args[2]); err == nil {
 			err = a.run("restore", args[1], "--target", args[2])
+		}
+	case "schedule":
+		if len(args) != 2 {
+			err = errors.New("usage: schedule <render|install|status|remove>")
+		} else {
+			switch args[1] {
+			case "render":
+				if !c.Schedule.Enabled {
+					err = errors.New("schedule is disabled in config.yml")
+				} else {
+					binaryPath, pathErr := executablePath()
+					if pathErr != nil {
+						err = pathErr
+					} else if calendarErr := validateCalendar(c.Schedule.OnCalendar); calendarErr != nil {
+						err = calendarErr
+					} else {
+						fmt.Printf("# %s\n%s# %s\n%s", serviceUnitName, serviceUnit(configPath, binaryPath), timerUnitName, timerUnit(c.Schedule))
+					}
+				}
+			case "install":
+				err = scheduleInstall(c, configPath)
+			case "status":
+				err = scheduleStatus()
+			case "remove":
+				err = scheduleRemove()
+			default:
+				err = fmt.Errorf("unknown schedule action %q; choose render, install, status, or remove", args[1])
+			}
 		}
 	default:
 		usage()

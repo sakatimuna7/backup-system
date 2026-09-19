@@ -63,6 +63,9 @@ backup-system version
 backup-system retention --dry-run
 backup-system retention --prune
 backup-system restore latest /tmp/server-restore
+backup-system schedule render
+backup-system schedule install
+backup-system schedule status
 ```
 
 Use another config with `-config /path/to/config.yml`. Run `config-check` before `init` or `backup` to validate the YAML, password file, and restic installation. `backup` and `retention --prune` take an exclusive lock. Retention is dry-run by default unless `--prune` is explicit or `retention.prune: true` is configured for a normal `backup` run.

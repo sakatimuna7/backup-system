@@ -38,8 +38,36 @@ jobs:
           go test -race -coverprofile=coverage.out -covermode=atomic -v ./...
           go tool cover -func=coverage.out
 
-      - name: Verify systemd timer
-        run: systemd-analyze verify contrib/backup-system.timer
+      - name: Verify systemd units
+        run: |
+          systemd-analyze verify contrib/backup-system.timer
+          tmp=$(mktemp -d)
+          printf 'secret\n' > "$tmp/password"
+          chmod 600 "$tmp/password"
+          mkdir -p "$tmp/data"
+          cat > "$tmp/config.yml" <<YAML
+          version: 1
+          repository:
+            url: "local:$tmp/repo"
+            password_file: "$tmp/password"
+          backup:
+            paths: ["$tmp/data"]
+          retention:
+            daily: 1
+            weekly: 1
+            monthly: 1
+          verify:
+            after_backup: false
+          schedule:
+            enabled: true
+            on_calendar: "*-*-* 02:00:00"
+            persistent: true
+            randomized_delay: "15m"
+          YAML
+          ./backup-system -config "$tmp/config.yml" schedule render > "$tmp/units"
+          grep -q 'OnCalendar=*-*-* 02:00:00' "$tmp/units"
+          grep -q 'backup-system.service' "$tmp/units"
+          echo "Generated schedule units: PASS"
 
       - name: E2E sandbox test
         run: |

@@ -66,7 +66,7 @@ func TestAcquireLockConflicts(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.1.1" {
+	if version != "0.2.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -87,6 +87,47 @@ func TestSuggestion(t *testing.T) {
 func TestContains(t *testing.T) {
 	if !contains(commands, "backup") || contains(commands, "bakcup") {
 		t.Fatal("contains returned unexpected result")
+	}
+}
+
+func TestScheduleUnits(t *testing.T) {
+	c := ScheduleConfig{Enabled: true, OnCalendar: "daily", Persistent: true, RandomizedDelay: "15m"}
+	service := serviceUnit("/etc/backup-system/config.yml", "/usr/local/bin/backup-system")
+	if !strings.Contains(service, `ExecStart="/usr/local/bin/backup-system" -config "/etc/backup-system/config.yml" backup`) || !strings.Contains(service, "NoNewPrivileges=true") {
+		t.Fatal("service unit missing expected settings")
+	}
+	timer := timerUnit(c)
+	for _, want := range []string{"OnCalendar=daily", "Persistent=true", "Unit=backup-system.service", "RandomizedDelaySec=15m"} {
+		if !strings.Contains(timer, want) {
+			t.Fatalf("timer unit missing %q", want)
+		}
+	}
+}
+
+func TestScheduleValidation(t *testing.T) {
+	d := t.TempDir()
+	pw := filepath.Join(d, "password")
+	if err := os.WriteFile(pw, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range []string{
+		"schedule:\n  enabled: true\n  on_calendar: \"\"\n",
+		"schedule:\n  randomized_delay: nope\n",
+	} {
+		cfg := filepath.Join(d, "config.yml")
+		data := []byte("version: 1\nrepository:\n  url: local\n  password_file: " + pw + "\nbackup:\n  paths: [/tmp]\n" + extra)
+		if err := os.WriteFile(cfg, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadConfig(cfg); err == nil {
+			t.Fatalf("expected schedule validation error for %q", extra)
+		}
+	}
+}
+
+func TestScheduleDisabledRenderGuard(t *testing.T) {
+	if err := scheduleInstall(Config{}, "/tmp/config.yml"); err == nil || !strings.Contains(err.Error(), "schedule is disabled") {
+		t.Fatalf("unexpected disabled schedule error: %v", err)
 	}
 }
 

@@ -27,3 +27,9 @@ retention:
 
 verify:
   after_backup: true
+
+schedule:
+  enabled: true
+  on_calendar: "*-*-* 02:00:00"
+  persistent: true
+  randomized_delay: "15m"

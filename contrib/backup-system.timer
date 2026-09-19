@@ -1,10 +1,13 @@
 [Unit]
-Description=Run backup-system daily
+Description=Run backup-system scheduled backup
 
 [Timer]
 OnCalendar=*-*-* 02:00:00
 Persistent=true
+Unit=backup-system.service
 RandomizedDelaySec=15m
+AccuracySec=1min
+# Schedule values are mirrored from config.yml by `schedule install`.
 
 [Install]
 WantedBy=timers.target
