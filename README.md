@@ -64,6 +64,24 @@ Common errors are actionable: a missing config points to `backup-system install`
 
 ## systemd (optional)
 
+Verify the timer before installing it:
+
+```bash
+make verify-systemd
+```
+
+The timer runs daily at 02:00, survives missed runs with `Persistent=true`, and adds up to 15 minutes of jitter.
+
+## Development
+
+```bash
+make test
+make coverage
+make verify-systemd
+```
+
+The CI workflow also runs race-enabled tests, statement coverage, the real restic sandbox E2E, and systemd timer verification.
+
 Templates are provided in [`contrib/`](contrib):
 
 - `contrib/backup-system.service`

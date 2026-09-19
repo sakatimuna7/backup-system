@@ -33,8 +33,13 @@ jobs:
       - name: Build
         run: go build -o backup-system .
 
-      - name: Unit tests
-        run: go test -v ./...
+      - name: Unit tests and coverage
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic -v ./...
+          go tool cover -func=coverage.out
+
+      - name: Verify systemd timer
+        run: systemd-analyze verify contrib/backup-system.timer
 
       - name: E2E sandbox test
         run: |
