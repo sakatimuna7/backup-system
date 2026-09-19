@@ -66,7 +66,7 @@ func TestAcquireLockConflicts(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.2.0" {
+	if version != "0.3.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -128,6 +128,79 @@ func TestScheduleValidation(t *testing.T) {
 func TestScheduleDisabledRenderGuard(t *testing.T) {
 	if err := scheduleInstall(Config{}, "/tmp/config.yml"); err == nil || !strings.Contains(err.Error(), "schedule is disabled") {
 		t.Fatalf("unexpected disabled schedule error: %v", err)
+	}
+}
+
+func TestRepositoryValidation(t *testing.T) {
+	d := t.TempDir()
+	pw := filepath.Join(d, "password")
+	if err := os.WriteFile(pw, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(d, "config.yml")
+	data := []byte("version: 2\nrepositories:\n  - name: same\n    url: local:a\n    password_file: " + pw + "\n  - name: same\n    url: local:b\n    password_file: " + pw + "\nbackup:\n  paths: [/tmp]\nschedule:\n  enabled: false\n")
+	if err := os.WriteFile(cfg, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cfg); err == nil || !strings.Contains(err.Error(), "duplicate repository name") {
+		t.Fatalf("unexpected duplicate error: %v", err)
+	}
+}
+
+func TestRcloneValidation(t *testing.T) {
+	d := t.TempDir()
+	pw, rc, bin := filepath.Join(d, "password"), filepath.Join(d, "rclone.conf"), filepath.Join(d, "rclone")
+	for path, content := range map[string]string{pw: "secret\n", rc: "[gdrive]\n"} {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", d+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cfg := filepath.Join(d, "config.yml")
+	data := []byte("version: 2\nrepositories:\n  - name: drive\n    url: rclone:gdrive:backup\n    password_file: " + pw + "\n    rclone_config: " + rc + "\nbackup:\n  paths: [/tmp]\nschedule:\n  enabled: false\n")
+	if err := os.WriteFile(cfg, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfig(cfg); err != nil {
+		t.Fatalf("rclone config rejected: %v", err)
+	}
+}
+
+func TestRestoreArgsAndEnv(t *testing.T) {
+	for _, args := range [][]string{
+		{"latest", "/tmp/restore", "--repository", "remote"},
+		{"--repository", "remote", "latest", "/tmp/restore"},
+	} {
+		name, positional, err := restoreArgs(args)
+		if err != nil || name != "remote" || len(positional) != 2 || positional[0] != "latest" {
+			t.Fatalf("restore args failed: name=%q positional=%#v err=%v", name, positional, err)
+		}
+	}
+	if _, _, err := restoreArgs([]string{"latest", "/tmp/restore", "--repository"}); err == nil {
+		t.Fatal("expected missing repository name")
+	}
+	env := cleanResticEnv([]string{"PATH=/bin", "RESTIC_REPOSITORY=old", "RCLONE_CONFIG=old", "RESTIC_PASSWORD_FILE=old", "HOME=/tmp"})
+	joined := strings.Join(env, "\n")
+	for _, key := range []string{"RESTIC_REPOSITORY=", "RESTIC_PASSWORD_FILE=", "RCLONE_CONFIG="} {
+		if strings.Contains(joined, key) {
+			t.Fatalf("stale environment variable remained: %s", key)
+		}
+	}
+	if !strings.Contains(joined, "PATH=/bin") || !strings.Contains(joined, "HOME=/tmp") {
+		t.Fatalf("unrelated environment variable was removed: %q", joined)
+	}
+}
+
+func TestRepositorySelector(t *testing.T) {
+	c := Config{Repositories: []RepositoryConfig{{Name: "local"}, {Name: "remote"}}}
+	if got, err := selectRepositories(c, "remote"); err != nil || len(got) != 1 || got[0].Name != "remote" {
+		t.Fatalf("selector failed: %v %#v", err, got)
+	}
+	if _, err := selectRepositories(c, "missing"); err == nil {
+		t.Fatal("expected unknown repository error")
 	}
 }
 

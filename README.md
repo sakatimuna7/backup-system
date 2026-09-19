@@ -68,8 +68,13 @@ Mistyped commands return a close suggestion, for example `bakcup` suggests `back
 ```sh
 backup-system install
 backup-system config-check
+backup-system repositories
 backup-system init
 backup-system backup
+backup-system backup --repository local
+backup-system snapshots
+backup-system verify --repository remote
+backup-system restore --repository remote latest /tmp/server-restore
 backup-system snapshots
 backup-system verify
 backup-system version
@@ -80,6 +85,8 @@ backup-system schedule render
 backup-system schedule install
 backup-system schedule status
 ```
+
+For Google Drive or another rclone backend, configure OAuth with `rclone config`, copy its config to `/etc/backup-system/rclone.conf` with mode `600`, then set `url: "rclone:gdrive:backup-system/vps-01"` and `rclone_config` in the repository entry. The wrapper passes `RCLONE_CONFIG` only to that repository operation; OAuth tokens never belong in `config.yml`.
 
 Use another config with `-config /path/to/config.yml`. Run `config-check` before `init` or `backup` to validate the YAML, password file, and restic installation. `backup` and `retention --prune` take an exclusive lock. Retention is dry-run by default unless `--prune` is explicit or `retention.prune: true` is configured for a normal `backup` run.
 

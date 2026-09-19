@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version       = "0.2.0"
+	version       = "0.3.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -31,17 +31,31 @@ func resticPath() (string, error) {
 }
 
 type Config struct {
-	Version    int              `yaml:"version"`
-	Repository RepositoryConfig `yaml:"repository"`
-	Backup     BackupConfig     `yaml:"backup"`
-	Retention  RetentionConfig  `yaml:"retention"`
-	Verify     VerifyConfig     `yaml:"verify"`
-	Schedule   ScheduleConfig   `yaml:"schedule"`
+	Version      int                `yaml:"version"`
+	Repositories []RepositoryConfig `yaml:"repositories,omitempty"`
+	Repository   RepositoryConfig   `yaml:"repository,omitempty"` // v1 compatibility
+	Backup       BackupConfig       `yaml:"backup"`
+	Retention    RetentionConfig    `yaml:"retention"`
+	Verify       VerifyConfig       `yaml:"verify"`
+	Schedule     ScheduleConfig     `yaml:"schedule"`
 }
 type RepositoryConfig struct {
+	Name         string `yaml:"name"`
 	URL          string `yaml:"url"`
 	PasswordFile string `yaml:"password_file"`
+	RcloneConfig string `yaml:"rclone_config"`
+	Required     *bool  `yaml:"required"`
 }
+
+func boolPtr(v bool) *bool                  { return &v }
+func (r RepositoryConfig) isRequired() bool { return r.Required == nil || *r.Required }
+func (r RepositoryConfig) displayName() string {
+	if r.Name != "" {
+		return r.Name
+	}
+	return "default"
+}
+
 type BackupConfig struct {
 	Paths   []string `yaml:"paths"`
 	Exclude []string `yaml:"exclude"`
@@ -81,15 +95,43 @@ func loadConfig(path string) (Config, error) {
 	if err := decoder.Decode(&c); err != nil {
 		return c, fmt.Errorf("invalid config: %w", err)
 	}
-	if c.Version != 1 {
-		return c, fmt.Errorf("unsupported config version %d (expected 1)", c.Version)
+	if c.Version != 1 && c.Version != 2 {
+		return c, fmt.Errorf("unsupported config version %d (expected 1 or 2)", c.Version)
 	}
-	if c.Repository.URL == "" {
-		return c, errors.New("repository.url is required")
+	if len(c.Repositories) == 0 && c.Repository.URL != "" {
+		c.Repositories = []RepositoryConfig{{Name: "default", URL: c.Repository.URL, PasswordFile: c.Repository.PasswordFile}}
 	}
-	if c.Repository.PasswordFile == "" {
-		return c, errors.New("repository.password_file is required")
+	if len(c.Repositories) == 0 {
+		return c, errors.New("repositories must not be empty")
 	}
+	seen := make(map[string]bool, len(c.Repositories))
+	for i := range c.Repositories {
+		r := &c.Repositories[i]
+		if r.Name == "" {
+			return c, errors.New("repository name is required")
+		}
+		if seen[r.Name] {
+			return c, fmt.Errorf("duplicate repository name: %s", r.Name)
+		}
+		seen[r.Name] = true
+		if r.URL == "" {
+			return c, fmt.Errorf("repository %s: url is required", r.Name)
+		}
+		if r.PasswordFile == "" {
+			r.PasswordFile = "/etc/backup-system/password"
+		}
+		if strings.HasPrefix(r.URL, "rclone:") {
+			parts := strings.SplitN(strings.TrimPrefix(r.URL, "rclone:"), ":", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return c, fmt.Errorf("repository %s: rclone URL must be rclone:<remote>:<path>", r.Name)
+			}
+			if r.RcloneConfig == "" {
+				return c, fmt.Errorf("repository %s: rclone_config is required for rclone URLs", r.Name)
+			}
+		}
+	}
+	c.Repository = c.Repositories[0] // legacy internal callers use the first repository
+
 	if len(c.Backup.Paths) == 0 {
 		return c, errors.New("backup.paths must not be empty")
 	}
@@ -114,21 +156,38 @@ func loadConfig(path string) (Config, error) {
 			return c, errors.New("schedule.randomized_delay must be a non-negative duration, e.g. 15m")
 		}
 	}
-	lst, err := os.Lstat(c.Repository.PasswordFile)
-	if err != nil {
-		return c, fmt.Errorf("password file: %w", err)
-	}
-	if lst.Mode()&os.ModeSymlink != 0 {
-		return c, errors.New("password_file must not be a symlink")
-	}
-	if lst.IsDir() {
-		return c, errors.New("password_file must be a file")
-	}
-	if lst.Size() == 0 {
-		return c, errors.New("password_file must not be empty")
-	}
-	if lst.Mode().Perm()&0o077 != 0 {
-		return c, errors.New("password_file must not be group/world-readable")
+	for _, r := range c.Repositories {
+		lst, err := os.Lstat(r.PasswordFile)
+		if err != nil {
+			return c, fmt.Errorf("repository %s password file: %w", r.Name, err)
+		}
+		if lst.Mode()&os.ModeSymlink != 0 {
+			return c, fmt.Errorf("repository %s password_file must not be a symlink", r.Name)
+		}
+		if !lst.Mode().IsRegular() {
+			return c, fmt.Errorf("repository %s password_file must be a regular file", r.Name)
+		}
+		if lst.Size() == 0 {
+			return c, fmt.Errorf("repository %s password_file must not be empty", r.Name)
+		}
+		if lst.Mode().Perm()&0o077 != 0 {
+			return c, fmt.Errorf("repository %s password_file must not be group/world-readable", r.Name)
+		}
+		if strings.HasPrefix(r.URL, "rclone:") {
+			if _, err := exec.LookPath("rclone"); err != nil {
+				return c, fmt.Errorf("repository %s requires rclone; install it with: sudo apt install rclone", r.Name)
+			}
+			rc, err := os.Lstat(r.RcloneConfig)
+			if err != nil {
+				return c, fmt.Errorf("repository %s rclone_config: %w", r.Name, err)
+			}
+			if rc.Mode()&os.ModeSymlink != 0 || !rc.Mode().IsRegular() {
+				return c, fmt.Errorf("repository %s rclone_config must be a regular file", r.Name)
+			}
+			if rc.Mode().Perm()&0o077 != 0 {
+				return c, fmt.Errorf("repository %s rclone_config must not be group/world-readable", r.Name)
+			}
+		}
 	}
 	return c, nil
 }
@@ -168,7 +227,19 @@ func acquireLock(path string) (*os.File, error) {
 	}
 	return f, nil
 }
-func (a *app) run(args ...string) error {
+func cleanResticEnv(env []string) []string {
+	clean := make([]string, 0, len(env))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && (key == "RESTIC_REPOSITORY" || key == "RESTIC_PASSWORD_FILE" || key == "RCLONE_CONFIG") {
+			continue
+		}
+		clean = append(clean, item)
+	}
+	return clean
+}
+
+func (a *app) runRepo(repo RepositoryConfig, args ...string) error {
 	restic, err := resticPath()
 	if err != nil {
 		return err
@@ -176,7 +247,11 @@ func (a *app) run(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), resticTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, restic, args...)
-	cmd.Env = append(os.Environ(), "RESTIC_REPOSITORY="+a.cfg.Repository.URL, "RESTIC_PASSWORD_FILE="+a.cfg.Repository.PasswordFile)
+	cmd.Env = cleanResticEnv(os.Environ())
+	cmd.Env = append(cmd.Env, "RESTIC_REPOSITORY="+repo.URL, "RESTIC_PASSWORD_FILE="+repo.PasswordFile)
+	if repo.RcloneConfig != "" {
+		cmd.Env = append(cmd.Env, "RCLONE_CONFIG="+repo.RcloneConfig)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -191,29 +266,130 @@ func (a *app) run(args ...string) error {
 	}
 	return nil
 }
-func (a *app) backup() error {
-	args := []string{"backup"}
-	args = append(args, a.cfg.Backup.Paths...)
+func (a *app) run(args ...string) error { return a.runRepo(a.cfg.Repositories[0], args...) }
+
+func (a *app) backupRepo(repo RepositoryConfig) error {
+	args := append([]string{"backup"}, a.cfg.Backup.Paths...)
 	for _, p := range a.cfg.Backup.Exclude {
 		args = append(args, "--exclude", p)
 	}
-	if err := a.run(args...); err != nil {
+	if err := a.runRepo(repo, args...); err != nil {
 		return err
 	}
 	if a.cfg.Verify.AfterBackup {
-		return a.run("check")
+		return a.runRepo(repo, "check")
 	}
 	return nil
 }
-func (a *app) retention(prune bool) error {
+func (a *app) retentionRepo(repo RepositoryConfig, prune bool) error {
 	args := []string{"forget", "--keep-daily", strconv.Itoa(a.cfg.Retention.Daily), "--keep-weekly", strconv.Itoa(a.cfg.Retention.Weekly), "--keep-monthly", strconv.Itoa(a.cfg.Retention.Monthly), "--dry-run"}
 	if prune {
 		args[len(args)-1] = "--prune"
 	}
-	return a.run(args...)
+	return a.runRepo(repo, args...)
+}
+func selectRepositories(c Config, name string) ([]RepositoryConfig, error) {
+	if name == "" {
+		return c.Repositories, nil
+	}
+	for _, r := range c.Repositories {
+		if r.Name == name {
+			return []RepositoryConfig{r}, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown repository %q", name)
+}
+func runRepositories(c Config, name string, fn func(RepositoryConfig) error) error {
+	repos, err := selectRepositories(c, name)
+	if err != nil {
+		return err
+	}
+	failed, requiredFailed := 0, 0
+	for _, repo := range repos {
+		if err := fn(repo); err != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "repository %s: FAILED: %v\n", repo.displayName(), err)
+			if repo.isRequired() {
+				requiredFailed++
+			}
+		} else {
+			fmt.Printf("repository %s: OK\n", repo.displayName())
+		}
+	}
+	if failed > 0 && requiredFailed > 0 {
+		return fmt.Errorf("%d required repository(s) failed", requiredFailed)
+	}
+	return nil
 }
 
-var commands = []string{"install", "version", "config-check", "init", "backup", "snapshots", "verify", "retention", "restore", "schedule"}
+func repositorySelector(args []string) (string, error) {
+	selector := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--repository" {
+			return "", fmt.Errorf("unexpected argument %q; use --repository name", args[i])
+		}
+		if selector != "" || i+1 >= len(args) || args[i+1] == "" {
+			return "", errors.New("--repository requires one name")
+		}
+		selector = args[i+1]
+		i++
+	}
+	return selector, nil
+}
+
+func validRepositoryArgs(args []string) bool {
+	_, err := repositorySelector(args)
+	return err == nil && (len(args) == 0 || (len(args) == 2 && args[0] == "--repository"))
+}
+
+func restoreArgs(args []string) (string, []string, error) {
+	selector := ""
+	positional := make([]string, 0, 2)
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--repository" {
+			if selector != "" || i+1 >= len(args) || args[i+1] == "" {
+				return "", nil, errors.New("--repository requires one name")
+			}
+			selector = args[i+1]
+			i++
+			continue
+		}
+		positional = append(positional, args[i])
+	}
+	if len(positional) != 2 {
+		return "", nil, errors.New("usage: restore [--repository name] <snapshot> <target>")
+	}
+	return selector, positional, nil
+}
+
+func retentionArgs(args []string) (string, bool, error) {
+	selector := ""
+	prune := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--prune":
+			if prune {
+				return "", false, errors.New("--prune specified twice")
+			}
+			prune = true
+		case "--dry-run":
+			if prune {
+				return "", false, errors.New("--dry-run cannot be combined with --prune")
+			}
+		case "--repository":
+			if selector != "" || i+1 >= len(args) || args[i+1] == "" {
+				return "", false, errors.New("--repository requires one name")
+			}
+			selector = args[i+1]
+			i++
+		default:
+			return "", false, fmt.Errorf("unexpected argument %q", args[i])
+		}
+	}
+	return selector, prune, nil
+}
+
+var commands = []string{"install", "version", "config-check", "repositories", "init", "backup", "snapshots", "verify", "retention", "restore", "schedule"}
 
 const (
 	systemdDir      = "/etc/systemd/system"
@@ -388,6 +564,7 @@ func printHelp(command string) {
 		fmt.Println("  install:       Create the config and password file")
 		fmt.Println("  version:       Show the installed version")
 		fmt.Println("  config-check:  Validate config, secrets, and restic")
+		fmt.Println("  repositories:  List configured repositories")
 		fmt.Println("  init:          Initialize the restic repository")
 		fmt.Println("  backup:        Create a backup snapshot")
 		fmt.Println("  snapshots:     List available snapshots")
@@ -423,20 +600,19 @@ func printHelp(command string) {
 		fmt.Println("Show the installed backup-system version.")
 	case "config-check":
 		fmt.Println("Validate YAML, paths, password permissions, and restic.")
-	case "init":
-		fmt.Println("Initialize the configured restic repository.")
-	case "backup":
-		fmt.Println("Back up configured paths and optionally verify the repository.")
-	case "snapshots":
-		fmt.Println("List snapshots in the configured repository.")
-	case "verify":
-		fmt.Println("Check repository integrity with restic.")
+	case "repositories":
+		fmt.Println("List configured repositories and their required/optional status.")
+		fmt.Println("\nUSAGE\n  backup-system repositories")
+		fmt.Println("\nRepository URLs and paths are shown; credential contents are never displayed.")
+	case "init", "backup", "snapshots", "verify":
+		fmt.Println("Use --repository name to target one repository, or omit it to process all configured repositories.")
+		fmt.Println("\nUSAGE\n  backup-system " + command + " [--repository name]")
 	case "retention":
 		fmt.Println("Preview retention by default; use --prune to delete old snapshots.")
-		fmt.Println("\nUSAGE\n  backup-system retention [--dry-run|--prune]")
+		fmt.Println("\nUSAGE\n  backup-system retention [--dry-run|--prune] [--repository name]")
 	case "restore":
 		fmt.Println("Restore a snapshot into a new or empty absolute directory.")
-		fmt.Println("\nUSAGE\n  backup-system restore <snapshot|latest> <absolute-target>")
+		fmt.Println("\nUSAGE\n  backup-system restore [--repository name] <snapshot|latest> <absolute-target>")
 	case "schedule":
 		fmt.Println("Manage the systemd timer that runs backup-system backup.")
 		fmt.Println("\nUSAGE\n  backup-system schedule <render|install|status|remove>")
@@ -502,12 +678,13 @@ func install(configPath string) error {
 	}
 	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		example := Config{
-			Version:    1,
-			Repository: RepositoryConfig{URL: "local:/var/backups/restic", PasswordFile: passwordFile},
-			Backup:     BackupConfig{Paths: []string{"/etc", "/home"}, Exclude: []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/var/cache", "/var/tmp", "/mnt", "/media"}},
-			Retention:  RetentionConfig{Daily: 14, Weekly: 8, Monthly: 6, Prune: false},
-			Verify:     VerifyConfig{AfterBackup: true},
-			Schedule:   ScheduleConfig{Enabled: true, OnCalendar: "*-*-* 02:00:00", Persistent: true, RandomizedDelay: "15m"},
+			Version:      2,
+			Repositories: []RepositoryConfig{{Name: "local", URL: "local:/var/backups/restic", PasswordFile: passwordFile, Required: boolPtr(true)}},
+			Repository:   RepositoryConfig{},
+			Backup:       BackupConfig{Paths: []string{"/etc", "/home"}, Exclude: []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/var/cache", "/var/tmp", "/mnt", "/media"}},
+			Retention:    RetentionConfig{Daily: 14, Weekly: 8, Monthly: 6, Prune: false},
+			Verify:       VerifyConfig{AfterBackup: true},
+			Schedule:     ScheduleConfig{Enabled: true, OnCalendar: "*-*-* 02:00:00", Persistent: true, RandomizedDelay: "15m"},
 		}
 		data, err := yaml.Marshal(example)
 		if err != nil {
@@ -566,10 +743,21 @@ func main() {
 		}
 		return
 	}
-	if command == "config-check" {
-		if _, err := loadConfig(configPath); err != nil {
+	if command == "config-check" || command == "repositories" {
+		c, err := loadConfig(configPath)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "backup-system:", err)
 			os.Exit(1)
+		}
+		if command == "repositories" {
+			for _, repo := range c.Repositories {
+				required := "optional"
+				if repo.isRequired() {
+					required = "required"
+				}
+				fmt.Printf("%-16s %-9s %s\n", repo.displayName(), required, repo.URL)
+			}
+			return
 		}
 		restic, err := resticPath()
 		if err != nil {
@@ -608,47 +796,70 @@ func main() {
 		}
 		defer a.lock.Close()
 	}
+	selector := ""
+	prune := false
+	var selectorErr error
+	if command == "retention" {
+		selector, prune, selectorErr = retentionArgs(args[1:])
+	} else if command != "restore" {
+		selector, selectorErr = repositorySelector(args[1:])
+	}
+	if selectorErr != nil {
+		err = selectorErr
+	}
 	switch command {
-	case "init":
+	case "repositories":
 		if len(args) != 1 {
-			err = errors.New("usage: init")
-		} else {
-			err = a.run("init")
+			err = errors.New("usage: repositories")
+		}
+	case "init":
+		if err == nil && (len(args) != 1 && len(args) != 3) {
+			err = errors.New("usage: init [--repository name]")
+		} else if err == nil {
+			err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.runRepo(r, "init") })
 		}
 	case "backup":
-		if len(args) != 1 {
-			err = errors.New("usage: backup")
-		} else {
-			err = a.backup()
+		if err == nil && (len(args) != 1 && len(args) != 3) {
+			err = errors.New("usage: backup [--repository name]")
+		} else if err == nil {
+			err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.backupRepo(r) })
 			if err == nil && c.Retention.Prune {
-				err = a.retention(true)
+				err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.retentionRepo(r, true) })
 			}
 		}
 	case "snapshots":
-		if len(args) != 1 {
-			err = errors.New("usage: snapshots")
-		} else {
-			err = a.run("snapshots")
+		if err == nil && (len(args) != 1 && len(args) != 3) {
+			err = errors.New("usage: snapshots [--repository name]")
+		} else if err == nil {
+			err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.runRepo(r, "snapshots") })
 		}
 	case "verify":
-		if len(args) != 1 {
-			err = errors.New("usage: verify")
-		} else {
-			err = a.run("check")
+		if err == nil && (len(args) != 1 && len(args) != 3) {
+			err = errors.New("usage: verify [--repository name]")
+		} else if err == nil {
+			err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.runRepo(r, "check") })
 		}
 	case "retention":
-		if len(args) > 2 || (len(args) == 2 && args[1] != "--prune" && args[1] != "--dry-run") {
-			err = errors.New("usage: retention [--dry-run|--prune]")
-		} else {
-			err = a.retention(len(args) == 2 && args[1] == "--prune")
+		if err == nil && len(args) > 4 {
+			err = errors.New("usage: retention [--dry-run|--prune] [--repository name]")
+		} else if err == nil {
+			err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.retentionRepo(r, prune) })
 		}
 	case "restore":
-		if len(args) != 3 {
-			err = errors.New("usage: restore <snapshot> <target>")
-		} else if !filepath.IsAbs(args[2]) {
+		restoreSelector, positional, parseErr := restoreArgs(args[1:])
+		if parseErr != nil {
+			err = parseErr
+		} else if len(c.Repositories) > 1 && restoreSelector == "" {
+			err = errors.New("multiple repositories configured; choose one with --repository")
+		} else if !filepath.IsAbs(positional[1]) {
 			err = errors.New("restore target must be absolute")
-		} else if err = validateRestoreTarget(args[2]); err == nil {
-			err = a.run("restore", args[1], "--target", args[2])
+		} else if err = validateRestoreTarget(positional[1]); err == nil {
+			repos, selectErr := selectRepositories(c, restoreSelector)
+			if selectErr != nil {
+				err = selectErr
+			} else {
+				err = a.runRepo(repos[0], "restore", positional[0], "--target", positional[1])
+			}
 		}
 	case "schedule":
 		if len(args) != 2 {

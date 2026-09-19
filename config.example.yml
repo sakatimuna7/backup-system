@@ -1,8 +1,15 @@
-version: 1
+version: 2
 
-repository:
-  url: "sftp:backup@example.com:/srv/restic/vps-01"
-  password_file: "/etc/backup-system/password"
+repositories:
+  - name: local
+    url: "local:/var/backups/restic"
+    password_file: "/etc/backup-system/password"
+    required: true
+  - name: remote
+    url: "rclone:gdrive:backup-system/vps-01"
+    password_file: "/etc/backup-system/password"
+    rclone_config: "/etc/backup-system/rclone.conf"
+    required: false
 
 backup:
   paths:
