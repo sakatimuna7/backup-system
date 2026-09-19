@@ -65,7 +65,7 @@ jobs:
             randomized_delay: "15m"
           YAML
           ./backup-system -config "$tmp/config.yml" schedule render > "$tmp/units"
-          grep -q 'OnCalendar=*-*-* 02:00:00' "$tmp/units"
+          grep -Fq 'OnCalendar=*-*-* 02:00:00' "$tmp/units"
           grep -q 'backup-system.service' "$tmp/units"
           echo "Generated schedule units: PASS"
 
