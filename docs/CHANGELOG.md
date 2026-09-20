@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.8.1] - 2026-09-20
+
+### Changed
+- Config version error messages now include supported range, binary version, and a direct link to the Version Compatibility docs
+- `recovery requires config version 3` error now includes the current version and fix instruction
+
 ## [0.8.0] - 2026-09-20
 
 ### Added
