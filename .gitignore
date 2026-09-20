@@ -2,3 +2,8 @@ backup-system
 dist/
 *.local.yml
 .lock
+
+# Secret files — never commit
+.env
+*.env
+

@@ -35,6 +35,7 @@ func resticPath() (string, error) {
 
 type Config struct {
 	Version      int                `yaml:"version"`
+	EnvFile      string             `yaml:"env_file"`
 	Repositories []RepositoryConfig `yaml:"repositories,omitempty"`
 	Repository   RepositoryConfig   `yaml:"repository,omitempty"` // v1 compatibility
 	Backup       BackupConfig       `yaml:"backup"`
@@ -247,8 +248,23 @@ func loadConfig(path string) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
+
+	// Pass 1: decode only env_file field (no expansion yet)
+	var envPass struct {
+		EnvFile string `yaml:"env_file"`
+	}
+	_ = yaml.NewDecoder(strings.NewReader(string(data))).Decode(&envPass)
+	if envPass.EnvFile != "" {
+		if err := loadEnvFile(envPass.EnvFile); err != nil {
+			return Config{}, fmt.Errorf("env_file %s: %w", envPass.EnvFile, err)
+		}
+	}
+
+	// Pass 2: expand ${VAR} then parse full config
+	expanded := os.ExpandEnv(string(data))
+
 	var c Config
-	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	decoder := yaml.NewDecoder(strings.NewReader(expanded))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&c); err != nil {
 		return c, fmt.Errorf("invalid config: %w", err)
@@ -918,6 +934,41 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 	}
 
 	return errs
+}
+
+// loadEnvFile reads KEY=value pairs from path into the process environment.
+// Requires file mode 0600 or stricter. Skips blank lines and # comments.
+// No shell expansion — values are stored literally.
+func loadEnvFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("cannot stat: %w", err)
+	}
+	if info.Mode().Perm()&0o177 != 0 {
+		return fmt.Errorf("insecure permissions %04o (must be 0600)", info.Mode().Perm())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	for i, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			return fmt.Errorf("line %d: invalid format (expected KEY=value)", i+1)
+		}
+		k = strings.TrimSpace(k)
+		if k == "" {
+			return fmt.Errorf("line %d: empty key", i+1)
+		}
+		if err := os.Setenv(k, strings.TrimSpace(v)); err != nil {
+			return fmt.Errorf("line %d: setenv %s: %w", i+1, k, err)
+		}
+	}
+	return nil
 }
 
 func sendTelegramNotify(cfg *TelegramNotifyConfig, success bool, detail string) error {

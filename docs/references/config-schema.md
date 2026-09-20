@@ -25,13 +25,44 @@ If you see an error like `unsupported config version` or `recovery requires conf
 
 ```yaml
 version: 3                 # Required: config schema version (see table above)
+env_file: "/etc/backup-system/.env"  # Optional: load secrets from .env file
 repositories: [...]       # List of backup destinations
 backup: {...}            # What to backup
 retention: {...}         # Snapshot retention policy
 verify: {...}            # Post-backup verification
 schedule: {...}          # Systemd timer (optional)
+notify: {...}            # Notifications (optional)
 recovery: {...}          # Recovery manifest (optional)
 ```
+
+## Env File (Optional)
+
+Centralizes all secrets in one mode-600 file. Loaded before YAML parsing so values are available for `${VAR}` substitution anywhere in `config.yml`.
+
+```bash
+# /etc/backup-system/.env — mode 600, never commit to git
+RESTIC_PASSWORD=your-restic-password
+TELEGRAM_BOT_TOKEN=123456:ABC...
+```
+
+```yaml
+# config.yml — no hardcoded secrets
+env_file: "/etc/backup-system/.env"
+
+notify:
+  telegram:
+    token: "${TELEGRAM_BOT_TOKEN}"
+    chat_id: "-1004469797164"
+```
+
+**Security rules enforced by binary:**
+- File must be mode `0600` — rejected if wider (e.g. `0644`)
+- Lines starting with `#` are skipped (comments)
+- Blank lines are skipped
+- Values stored literally — no shell expansion inside `.env`
+- Secrets never appear in logs or `config-check` output
+
+
 
 ## Repositories
 

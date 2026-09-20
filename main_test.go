@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -322,5 +323,87 @@ func TestRecoveryUserValidation(t *testing.T) {
 	}
 	if err := validateRecovery(RecoveryConfig{Users: []RecoveryUser{{Name: "deploy", Home: "/home/deploy", CreateHome: true}}}); err != nil {
 		t.Fatalf("expected valid user config: %v", err)
+	}
+}
+
+func TestLoadEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+
+	// Write valid .env mode 600
+	content := "# comment\nTEST_KEY=hello\nTEST_SPACES = world\n\nTEST_EMPTY=\n"
+	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadEnvFile(envPath); err != nil {
+		t.Fatalf("expected ok: %v", err)
+	}
+	if os.Getenv("TEST_KEY") != "hello" {
+		t.Fatalf("expected TEST_KEY=hello, got %q", os.Getenv("TEST_KEY"))
+	}
+	if os.Getenv("TEST_SPACES") != "world" {
+		t.Fatalf("expected TEST_SPACES=world, got %q", os.Getenv("TEST_SPACES"))
+	}
+
+	// Insecure permissions → reject
+	insecure := filepath.Join(dir, "insecure.env")
+	_ = os.WriteFile(insecure, []byte("X=1\n"), 0644)
+	if err := loadEnvFile(insecure); err == nil {
+		t.Fatal("expected permission error for 0644")
+	}
+
+	// Missing file → error
+	if err := loadEnvFile(filepath.Join(dir, "missing.env")); err == nil {
+		t.Fatal("expected error for missing file")
+	}
+
+	// Invalid line (no =) → error
+	bad := filepath.Join(dir, "bad.env")
+	_ = os.WriteFile(bad, []byte("NOEQUALSSIGN\n"), 0600)
+	if err := loadEnvFile(bad); err == nil {
+		t.Fatal("expected error for invalid format")
+	}
+}
+
+func TestEnvExpansion(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	_ = os.WriteFile(envPath, []byte("TEST_NOTIFY_TOKEN=mytoken123\n"), 0600)
+
+	repoDir := filepath.Join(dir, "restic-repo")
+	_ = os.MkdirAll(repoDir, 0700)
+	passFile := filepath.Join(dir, "password")
+	_ = os.WriteFile(passFile, []byte("testpass\n"), 0600)
+
+	cfg := fmt.Sprintf(`version: 3
+env_file: %q
+repositories:
+  - name: local
+    url: "local:%s"
+    password_file: %q
+backup:
+  paths: ["/etc/hostname"]
+retention:
+  daily: 1
+  weekly: 0
+  monthly: 0
+notify:
+  telegram:
+    token: "${TEST_NOTIFY_TOKEN}"
+    chat_id: "-123"
+`, envPath, repoDir, passFile)
+
+	cfgPath := filepath.Join(dir, "config.yml")
+	_ = os.WriteFile(cfgPath, []byte(cfg), 0600)
+
+	c, err := loadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if c.Notify.Telegram == nil {
+		t.Fatal("expected telegram notify config")
+	}
+	if c.Notify.Telegram.Token != "mytoken123" {
+		t.Fatalf("expected expanded token, got %q", c.Notify.Telegram.Token)
 	}
 }

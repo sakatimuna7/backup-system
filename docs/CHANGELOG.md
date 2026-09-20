@@ -9,7 +9,13 @@ All notable changes to this project are documented here.
 - `notify.telegram` config section: `token_file`, `token`, `chat_id`, `thread_id`
 - Sends `✅ Backup berhasil` / `❌ Backup gagal` after every `backup` command
 - GDrive (rclone) as second repository — offsite backup alongside local
-- `notify.telegram.token_file` supports `.env` format (`KEY=value`) with comment skipping
+- **`env_file` support** — centralize all secrets in one mode-600 file
+- `${VAR}` substitution in `config.yml` via `os.ExpandEnv` (stdlib, zero deps)
+- `loadEnvFile` rejects files with permissions wider than 0600 (security gate)
+- `.env` and `*.env` added to `.gitignore`
+
+### Bug Fix
+- `token_file` parser now correctly skips comment lines (`#`) in `.env` files
 
 ## [0.8.1] - 2026-09-20
 
