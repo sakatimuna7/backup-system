@@ -1,13 +1,13 @@
 # Production Readiness Checklist
 
-This document confirms that `backup-system` v0.5.0 is production-ready for VPS backups with optional recovery planning.
+This document confirms that `backup-system` v0.8.0 is production-ready for VPS backups with full automated recovery.
 
 ## Scope
 
 - **Backups**: Automated restic-based snapshots to local, SFTP, S3, or Google Drive
 - **Verification**: Integrity checks and dry-run restore testing
 - **Scheduling**: Systemd timers with jitter and persistent missed-run recovery
-- **Recovery Planning**: Read-only manifests and staged restore validation (MVP)
+- **Recovery**: Full automated restore — packages, runtimes (nvm/bun/npm-global/shell), users, databases, files
 
 ## What's Ready
 
@@ -25,10 +25,15 @@ This document confirms that `backup-system` v0.5.0 is production-ready for VPS b
 - ✓ rclone config support (mode 600) for OAuth backends
 - ✓ Secrets never logged or committed
 
-### Recovery (Milestone 1-3)
+### Recovery (v0.5.0 → v0.8.0)
 - ✓ `recovery plan` — read-only manifest preview
 - ✓ `recovery check` — validate staging and repository
-- ✓ `recovery run` — restore to staging (non-destructive)
+- ✓ `recovery run` — full automated restore:
+  - apt packages install
+  - Runtime install: nvm, bun, npm-global, shell (arbitrary)
+  - User + group creation
+  - Database restore (PostgreSQL, MySQL)
+  - File restore to staging (non-destructive)
 
 ### Testing
 - ✓ Unit tests (config parsing, flag handling, recovery schema)
@@ -36,20 +41,12 @@ This document confirms that `backup-system` v0.5.0 is production-ready for VPS b
 - ✓ Systemd unit generation and verification
 - ✓ CI/CD workflow (gofmt, build, test, E2E, release)
 
-## What's Not Included (Future Milestones)
-
-- Database dump/restore orchestration (milestone 4)
-- Package installation or user creation (milestone 5)
-- Application build, start, and healthcheck (milestone 6)
-
-Deploy only the staged recovery (milestones 1-3) to production. Post-recovery application setup remains manual or scripted separately.
-
 ## Deployment Steps
 
 1. **Install binary**
    ```sh
-   curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.5.0/backup-system-linux-amd64
-   curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.5.0/SHA256SUMS
+   curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.8.0/backup-system-linux-amd64
+   curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.8.0/SHA256SUMS
    sha256sum --check SHA256SUMS
    sudo install -m 755 backup-system-linux-amd64 /usr/local/bin/backup-system
    ```

@@ -39,14 +39,16 @@ sudo nano /etc/backup-system/config.yml
 Minimal config for recovery (only repository + password needed):
 
 ```yaml
-version: 1
+version: 3
 
-repository:
-  url: "sftp:backup@backup.example.com:/srv/restic/vps-01"
-  password_file: "/etc/backup-system/password"
+repositories:
+  - name: local
+    url: "local:/var/backups/restic"
+    password_file: "/etc/backup-system/password"
+    required: true
 
 backup:
-  paths: ["/dummy"]   # not used during restore
+  paths: ["/etc/nginx"]   # not critical during restore
 
 retention:
   daily: 0

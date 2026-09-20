@@ -1,4 +1,4 @@
-# v0.5.0 → v0.7.0 Wrap-up Report
+# Security Audit — v0.5.0 → v0.8.0
 
 ## Test Results
 
@@ -7,20 +7,19 @@
 **Format check (gofmt):** ✓
 **No whitespace issues:** ✓
 
-## Diff Analysis (v0.5.0..v0.7.0)
+## Diff Analysis (v0.5.0..v0.8.0)
 
 **Files changed:**
-- `CHANGELOG.md` — Release history
-- `PRODUCTION.md` — Deployment guide
-- `README.md` — Documentation updates
-- `config.example.yml` — Database + user examples
-- `main.go` — +149 lines (database + package + user logic)
-- `main_test.go` — +32 lines (3 new test cases)
+- `docs/` — Full documentation restructure
+- `config.example.yml` — Database + user + runtime examples
+- `main.go` — +220 lines (database + package + user + runtime logic)
+- `main_test.go` — +40 lines (DB/pkg/user/runtime validation tests)
 
-**Metrics:**
-- Total changes: 395 insertions, 8 deletions
-- 2 new commits, 3 milestones (4, 5, 6-preview)
-- New features: database restore, package install, user creation
+**New features (v0.6.0–v0.8.0):**
+- Database restore: PostgreSQL, MySQL
+- Package install: apt-get
+- User creation: useradd + usermod groups
+- Runtime install: nvm, bun, npm-global, shell
 
 ## Security Audit
 

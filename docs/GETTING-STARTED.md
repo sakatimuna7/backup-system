@@ -14,8 +14,8 @@ Small, auditable VPS backup agent. It keeps the user interface simple and delega
 Download the binary for Linux and verify its checksum:
 
 ```sh
-curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.7.0/backup-system-linux-amd64
-curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.7.0/SHA256SUMS
+curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.8.0/backup-system-linux-amd64
+curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.8.0/SHA256SUMS
 sha256sum --check SHA256SUMS
 sudo install -m 755 backup-system-linux-amd64 /usr/local/bin/backup-system
 ```

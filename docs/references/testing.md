@@ -1,6 +1,6 @@
 # Documentation Index
 
-Complete documentation untuk backup-system v0.7.0.
+Complete documentation untuk backup-system v0.8.0.
 
 ## User Guides
 
@@ -29,6 +29,7 @@ Complete documentation untuk backup-system v0.7.0.
 ## Release Notes
 
 ### [CHANGELOG.md](CHANGELOG.md)
+- v0.8.0 — Runtime installer (nvm, bun, npm-global, shell)
 - v0.7.0 — Package install + user creation
 - v0.6.0 — Database restore (PostgreSQL, MySQL)
 - v0.5.0 — Recovery run (staging)
