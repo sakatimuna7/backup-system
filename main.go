@@ -865,6 +865,13 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 		}
 	}
 
+	// Install runtimes (nvm, bun, etc.)
+	if len(c.Recovery.Runtimes) > 0 {
+		if rtErrs := installRuntimes(c.Recovery.Runtimes); len(rtErrs) > 0 {
+			errs = append(errs, rtErrs...)
+		}
+	}
+
 	// Create users
 	if len(c.Recovery.Users) > 0 {
 		if userErrs := createUsers(c.Recovery.Users); len(userErrs) > 0 {
@@ -889,6 +896,73 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 	}
 
 	return errs
+}
+
+func installRuntimes(runtimes []RecoveryRuntime) []string {
+	var errs []string
+	for _, rt := range runtimes {
+		if err := installRuntime(rt); err != nil {
+			errs = append(errs, fmt.Sprintf("runtime %s install failed: %v", rt.Name, err))
+		}
+	}
+	return errs
+}
+
+func installRuntime(rt RecoveryRuntime) error {
+	switch rt.Name {
+	case "nvm":
+		// Install nvm via official install script
+		version := rt.Version
+		if version == "" {
+			version = "v0.40.1"
+		}
+		url := fmt.Sprintf("https://raw.githubusercontent.com/nvm-sh/nvm/%s/install.sh", version)
+		cmd := exec.Command("bash", "-c", fmt.Sprintf("curl -fsSL %s | bash", url))
+		cmd.Env = append(os.Environ(), "HOME=/root")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%w (output: %s)", err, string(out))
+		}
+		// Install node version if specified in Install field
+		if rt.Install != "" {
+			cmd = exec.Command("bash", "-c",
+				fmt.Sprintf(`. /root/.nvm/nvm.sh && nvm install %s && nvm alias default %s`, rt.Install, rt.Install))
+			cmd.Env = append(os.Environ(), "HOME=/root")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("nvm install %s failed: %w (output: %s)", rt.Install, err, string(out))
+			}
+		}
+	case "bun":
+		// Install bun via official install script
+		cmd := exec.Command("bash", "-c", "curl -fsSL https://bun.sh/install | bash")
+		cmd.Env = append(os.Environ(), "HOME=/root")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%w (output: %s)", err, string(out))
+		}
+	case "npm-global":
+		// Install npm global package, requires nvm already active
+		if rt.Install == "" {
+			return fmt.Errorf("npm-global requires install field (package name)")
+		}
+		cmd := exec.Command("bash", "-c",
+			fmt.Sprintf(`. /root/.nvm/nvm.sh && npm install -g %s`, rt.Install))
+		cmd.Env = append(os.Environ(), "HOME=/root")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%w (output: %s)", err, string(out))
+		}
+	case "shell":
+		// Generic: run arbitrary install command
+		if rt.Install == "" {
+			return fmt.Errorf("shell runtime requires install field (command to run)")
+		}
+		cmd := exec.Command("bash", "-c", rt.Install)
+		cmd.Env = append(os.Environ(), "HOME=/root")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("%w (output: %s)", err, string(out))
+		}
+	default:
+		return fmt.Errorf("unknown runtime: %s (supported: nvm, bun, npm-global, shell)", rt.Name)
+	}
+	return nil
 }
 
 func installPackages(packages []string) []string {
