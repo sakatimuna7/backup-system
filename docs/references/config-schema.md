@@ -2,10 +2,29 @@
 
 Complete YAML schema for `/etc/backup-system/config.yml`.
 
+## Version Compatibility
+
+| Config `version` | Binary | Features |
+|-----------------|--------|----------|
+| `1` | v0.1.0+ | backup, restore, retention, verify |
+| `2` | v0.2.0+ | + schedule (systemd timer) |
+| `3` | v0.5.0+ | + recovery (plan, check, run), runtimes, databases, users |
+
+**Current:** config `version: 3`, binary `v0.8.0`
+
+The `version` field in `config.yml` is the **schema version** — not the binary version. The binary accepts any config version it supports (1–3). If you use a feature that requires a newer schema (e.g. `recovery:`), the binary will tell you to upgrade to `version: 3`.
+
+```yaml
+# Always set this at the top of config.yml
+version: 3
+```
+
+If you see an error like `unsupported config version` or `recovery requires config version 3`, update the first line of your config and re-run `config-check`.
+
 ## Root
 
 ```yaml
-version: 3                 # Required: config version (currently 3)
+version: 3                 # Required: config schema version (see table above)
 repositories: [...]       # List of backup destinations
 backup: {...}            # What to backup
 retention: {...}         # Snapshot retention policy

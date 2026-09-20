@@ -241,10 +241,19 @@ func loadConfig(path string) (Config, error) {
 		return c, fmt.Errorf("invalid config: %w", err)
 	}
 	if c.Version < 1 || c.Version > 3 {
-		return c, fmt.Errorf("unsupported config version %d (expected 1, 2, or 3)", c.Version)
+		return c, fmt.Errorf(
+			"unsupported config version %d\n"+
+				"  supported: 1, 2, 3 (current: 3)\n"+
+				"  this binary (v%s) requires config version 1–3\n"+
+				"  see: https://github.com/sakatimuna7/backup-system/blob/main/docs/references/config-schema.md#version-compatibility",
+			c.Version, version)
 	}
 	if c.Version < 3 && recoveryConfigured(c.Recovery) {
-		return c, errors.New("recovery requires config version 3")
+		return c, fmt.Errorf(
+			"recovery requires config version 3 (current: %d)\n"+
+				"  add 'version: 3' at the top of your config.yml\n"+
+				"  see: https://github.com/sakatimuna7/backup-system/blob/main/docs/references/config-schema.md#version-compatibility",
+			c.Version)
 	}
 	if err := validateRecovery(c.Recovery); err != nil {
 		return c, err
