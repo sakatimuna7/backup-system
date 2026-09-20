@@ -2,7 +2,7 @@
 
 **Small, auditable VPS backup agent powered by [restic](https://restic.net/).**
 
-[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](https://github.com/sakatimuna7/backup-system/releases/tag/v0.7.0)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](https://github.com/sakatimuna7/backup-system/releases/tag/v0.8.0)
 [![Tests](https://img.shields.io/badge/tests-24%2F24%20passing-success.svg)](https://github.com/sakatimuna7/backup-system)
 
 ## Features
@@ -19,8 +19,8 @@
 
 ```sh
 # Install
-curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.7.0/backup-system-linux-amd64
-curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.7.0/SHA256SUMS
+curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.8.0/backup-system-linux-amd64
+curl -LO https://github.com/sakatimuna7/backup-system/releases/download/v0.8.0/SHA256SUMS
 sha256sum --check SHA256SUMS
 sudo install -m 755 backup-system-linux-amd64 /usr/local/bin/backup-system
 
