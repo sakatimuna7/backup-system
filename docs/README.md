@@ -1,6 +1,6 @@
 # backup-system Documentation
 
-Complete documentation for backup-system v0.8.0 — a small, auditable VPS backup agent powered by [restic](https://restic.net/).
+Complete documentation for backup-system v0.9.0 — a small, auditable VPS backup agent powered by [restic](https://restic.net/).
 
 ## Quick Links
 
@@ -8,7 +8,7 @@ Complete documentation for backup-system v0.8.0 — a small, auditable VPS backu
 - **[Commands Reference](COMMANDS.md)** — All CLI commands with examples
 - **[Recovery Guide](RECOVERY.md)** — Step-by-step disaster recovery
 - **[Production Deployment](PRODUCTION.md)** — Deployment checklist & limits
-- **[Changelog](CHANGELOG.md)** — Version history v0.1.0 → v0.8.0
+- **[Changelog](CHANGELOG.md)** — Version history v0.1.0 → v0.9.0
 
 ## References
 
@@ -19,6 +19,7 @@ Complete documentation for backup-system v0.8.0 — a small, auditable VPS backu
 
 ✅ Multi-repository backups (local, SFTP, S3, Google Drive)  
 ✅ Encrypted snapshots with restic  
+✅ Telegram notifications (native, no n8n needed)  
 ✅ Database restore (PostgreSQL, MySQL)  
 ✅ Package installation (apt-get)  
 ✅ Runtime installer (nvm, bun, npm-global, shell)  

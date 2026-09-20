@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.9.0] - 2026-09-20
+
+### Added
+- Native Telegram notification support — no more n8n webhook dependency
+- `notify.telegram` config section: `token_file`, `token`, `chat_id`, `thread_id`
+- Sends `✅ Backup berhasil` / `❌ Backup gagal` after every `backup` command
+- GDrive (rclone) as second repository — offsite backup alongside local
+- `notify.telegram.token_file` supports `.env` format (`KEY=value`) with comment skipping
+
 ## [0.8.1] - 2026-09-20
 
 ### Changed

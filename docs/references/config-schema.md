@@ -68,6 +68,25 @@ backup:
 
 Paths must be absolute. Exclusions are patterns matched by restic.
 
+## Notify (Optional)
+
+```yaml
+notify:
+  telegram:
+    token_file: "/root/.hermes/.env"  # .env file with TELEGRAM_BOT_TOKEN=xxx
+    # token: "123:ABC..."             # or inline token (less secure)
+    chat_id: "-1004469797164"         # Required: group/channel ID
+    thread_id: "282"                  # Optional: topic thread ID
+```
+
+Sends `✅ Backup berhasil` or `❌ Backup gagal` after every `backup` command.
+
+`token_file` supports:
+- `.env` format: `TELEGRAM_BOT_TOKEN=value` (comments with `#` are skipped)
+- Bare value: a file containing just the token
+
+If notification fails, backup still succeeds — a `warn:` line is printed to stderr.
+
 ## Retention
 
 ```yaml

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-	version       = "0.8.1"
+	version       = "0.9.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -41,6 +42,18 @@ type Config struct {
 	Verify       VerifyConfig       `yaml:"verify"`
 	Schedule     ScheduleConfig     `yaml:"schedule"`
 	Recovery     RecoveryConfig     `yaml:"recovery"`
+	Notify       NotifyConfig       `yaml:"notify"`
+}
+
+type NotifyConfig struct {
+	Telegram *TelegramNotifyConfig `yaml:"telegram"`
+}
+
+type TelegramNotifyConfig struct {
+	TokenFile string `yaml:"token_file"`
+	Token     string `yaml:"token"`
+	ChatID    string `yaml:"chat_id"`
+	ThreadID  string `yaml:"thread_id"`
 }
 
 type RecoveryConfig struct {
@@ -907,6 +920,59 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 	return errs
 }
 
+func sendTelegramNotify(cfg *TelegramNotifyConfig, success bool, detail string) error {
+	if cfg == nil {
+		return nil
+	}
+	token := cfg.Token
+	if token == "" && cfg.TokenFile != "" {
+		raw, err := os.ReadFile(cfg.TokenFile)
+		if err != nil {
+			return fmt.Errorf("notify: cannot read token_file: %w", err)
+		}
+		// support KEY=value or bare value
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			if after, ok := strings.CutPrefix(line, "TELEGRAM_BOT_TOKEN="); ok {
+				token = strings.TrimSpace(after)
+				break
+			}
+		}
+	}
+	if token == "" {
+		return errors.New("notify: telegram token is empty")
+	}
+	icon, title := "✅", "Backup berhasil"
+	if !success {
+		icon, title = "❌", "Backup gagal"
+	}
+	text := icon + " " + title
+	if detail != "" {
+		text += "\n" + detail
+	}
+	form := url.Values{}
+	form.Set("chat_id", cfg.ChatID)
+	form.Set("text", text)
+	if cfg.ThreadID != "" {
+		form.Set("message_thread_id", cfg.ThreadID)
+	}
+	resp, err := http.PostForm(
+		fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token),
+		form,
+	)
+	if err != nil {
+		return fmt.Errorf("notify: telegram request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("notify: telegram returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func installRuntimes(runtimes []RecoveryRuntime) []string {
 	var errs []string
 	for _, rt := range runtimes {
@@ -1295,6 +1361,14 @@ func main() {
 			if err == nil && c.Retention.Prune {
 				err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.retentionRepo(r, true) })
 			}
+		}
+		if notifyErr := sendTelegramNotify(c.Notify.Telegram, err == nil, func() string {
+			if err != nil {
+				return err.Error()
+			}
+			return "Semua repository selesai dibackup"
+		}()); notifyErr != nil {
+			fmt.Fprintf(os.Stderr, "warn: %v\n", notifyErr)
 		}
 	case "snapshots":
 		if err == nil && (len(args) != 1 && len(args) != 3) {
