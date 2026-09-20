@@ -190,6 +190,22 @@ backup-system recovery run
 
 Restores to staging path configured in `recovery.restore.staging` (default: `/recovery/staging`).
 
+**Execution order:**
+1. Install apt packages (`recovery.packages.apt`)
+2. Install runtimes (`recovery.runtimes`) — nvm, bun, npm-global, shell
+3. Create users (`recovery.users`)
+4. Restore databases (`recovery.databases`)
+5. Restore files to staging
+
+**Runtime types supported:**
+
+| Type | Example |
+|------|---------|
+| `nvm` | Install nvm + Node.js `24` |
+| `npm-global` | `npm install -g 9router` via nvm |
+| `bun` | Install bun via bun.sh |
+| `shell` | Any arbitrary install command |
+
 ## Help Commands
 
 ### --help

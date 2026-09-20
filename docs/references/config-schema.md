@@ -100,6 +100,32 @@ recovery:
 
 Installed during `recovery run` (apt-get install).
 
+### Runtimes
+
+```yaml
+recovery:
+  runtimes:
+    - name: nvm
+      version: "v0.40.1"   # nvm version to install
+      install: "24"         # Node.js version to install via nvm
+    - name: npm-global
+      install: "9router"    # npm package name (requires nvm)
+    - name: bun             # installs bun via bun.sh
+    - name: shell
+      install: "curl -fsSL https://astral.sh/uv/install.sh | bash && uv tool install headroom-ai"
+```
+
+Supported runtime types:
+
+| Type | Description |
+|------|-------------|
+| `nvm` | Installs nvm + Node.js version; sets default alias |
+| `npm-global` | Runs `npm install -g <install>` via nvm |
+| `bun` | Installs bun via official bun.sh script |
+| `shell` | Runs arbitrary `install` command as bash |
+
+Runtimes run after `packages` and before `users` during `recovery run`.
+
 ### Users
 
 ```yaml

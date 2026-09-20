@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## [0.8.0] - 2026-09-20
+
+### Added
+- Runtime installer support in `recovery run`: `nvm`, `bun`, `npm-global`, `shell`
+- `nvm` — installs nvm + specific Node.js version, sets default alias
+- `npm-global` — installs npm global packages via nvm (e.g. `9router`)
+- `bun` — installs bun via official install script
+- `shell` — runs arbitrary install command (e.g. `uv tool install headroom-ai`)
+- `runtimes` section in `recovery` config block
+- Recovery execution order updated: packages → runtimes → users → databases
+
 ## [0.7.0] - 2026-09-19
 
 ### Added
