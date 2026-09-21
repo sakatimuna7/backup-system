@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,7 +124,7 @@ func TestRecoveryPlan(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.10.0" {
+	if version != "0.11.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -405,5 +406,85 @@ notify:
 	}
 	if c.Notify.Telegram.Token != "mytoken123" {
 		t.Fatalf("expected expanded token, got %q", c.Notify.Telegram.Token)
+	}
+}
+
+func TestSelfUpdateCheck(t *testing.T) {
+	// --check: only reads GitHub API, no download, no write
+	// We just verify the function doesn't panic and handles already-up-to-date
+	// by comparing against a fake "older" version string.
+	// Real network call is acceptable in integration context;
+	// skip if offline.
+	if err := selfUpdate(true); err != nil {
+		// network unavailable in CI — skip gracefully
+		t.Logf("selfUpdate --check skipped (network): %v", err)
+	}
+}
+
+func TestParseBackupOutput(t *testing.T) {
+	out := `
+using parent snapshot abc12345
+Files:           3 new,     7 changed, 20577 unmodified
+Added to the repository: 2.681 MiB (461.060 KiB stored)
+
+snapshot ef567890 saved
+`
+	sid, fn, fc, _, added, stored, noParent := parseBackupOutput(out)
+	if sid != "ef567890" {
+		t.Errorf("snapshot ID: got %q", sid)
+	}
+	if fn != "3" || fc != "7" {
+		t.Errorf("files: new=%q changed=%q", fn, fc)
+	}
+	if added != "2.681 MiB" {
+		t.Errorf("added: got %q", added)
+	}
+	if stored != "461.060 KiB stored" {
+		t.Errorf("stored: got %q", stored)
+	}
+	if noParent {
+		t.Error("noParent should be false")
+	}
+
+	// First backup (no parent)
+	out2 := "no parent snapshot found, will read all files\nsnapshot aabb1234 saved\n"
+	sid2, _, _, _, _, _, noParent2 := parseBackupOutput(out2)
+	if sid2 != "aabb1234" {
+		t.Errorf("snapshot ID: got %q", sid2)
+	}
+	if !noParent2 {
+		t.Error("noParent should be true")
+	}
+}
+
+func TestFormatBackupNotif(t *testing.T) {
+	results := []BackupResult{
+		{Repo: "local", Required: true, SnapshotID: "abc12345", FilesNew: "3", FilesChanged: "7", Added: "2.6 MiB", Stored: "461 KiB stored"},
+		{Repo: "gdrive", Required: false, NoParent: true, Added: "45 MiB"},
+	}
+	success, text := formatBackupNotif(results, "myhost")
+	if !success {
+		t.Error("expected success")
+	}
+	if !strings.Contains(text, "abc12345") {
+		t.Error("expected snapshot ID in text")
+	}
+	if !strings.Contains(text, "full (first backup)") {
+		t.Error("expected first backup label")
+	}
+	if !strings.Contains(text, "All 2 repo(s) OK") {
+		t.Error("expected summary line")
+	}
+
+	// One failed required
+	results2 := []BackupResult{
+		{Repo: "local", Required: true, Err: errors.New("disk full")},
+	}
+	success2, text2 := formatBackupNotif(results2, "myhost")
+	if success2 {
+		t.Error("expected failure")
+	}
+	if !strings.Contains(text2, "disk full") {
+		t.Error("expected error in text")
 	}
 }

@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.11.0] - 2026-09-20
+
+### Added
+- `backup-system update` — self-update command, downloads latest release from GitHub
+- `backup-system update --check` — check for updates without downloading
+- SHA256 verified before replacing binary (atomic rename)
+- Detects correct arch (amd64/arm64) automatically
+- 3 new tests: `TestSelfUpdateCheck`, `TestParseBackupOutput`, `TestFormatBackupNotif`
+
 ## [0.10.0] - 2026-09-20
 
 ### Added

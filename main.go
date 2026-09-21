@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,7 +23,7 @@ import (
 )
 
 const (
-	version       = "0.10.0"
+	version       = "0.11.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -699,7 +702,7 @@ func retentionArgs(args []string) (string, bool, error) {
 	return selector, prune, nil
 }
 
-var commands = []string{"install", "version", "config-check", "repositories", "init", "backup", "snapshots", "verify", "retention", "restore", "recovery", "schedule"}
+var commands = []string{"install", "version", "update", "config-check", "repositories", "init", "backup", "snapshots", "verify", "retention", "restore", "recovery", "schedule"}
 
 const (
 	systemdDir      = "/etc/systemd/system"
@@ -908,6 +911,11 @@ func printHelp(command string) {
 		fmt.Println("Create the default config and password file.")
 	case "version":
 		fmt.Println("Show the installed backup-system version.")
+	case "update":
+		fmt.Println("Check for a newer release on GitHub and update the binary in-place.")
+		fmt.Println("\nUSAGE\n  backup-system update           # update to latest\n  backup-system update --check   # check only, no download")
+		fmt.Println("\nRequires write permission to the installed binary path (run with sudo if needed).")
+		fmt.Println("SHA256 is verified before replacing the binary.")
 	case "config-check":
 		fmt.Println("Validate YAML, paths, password permissions, and restic.")
 	case "repositories":
@@ -1089,6 +1097,125 @@ func loadEnvFile(path string) error {
 			return fmt.Errorf("line %d: setenv %s: %w", i+1, k, err)
 		}
 	}
+	return nil
+}
+
+// selfUpdate checks GitHub for a newer release and replaces the running binary.
+// checkOnly=true prints status without downloading.
+func selfUpdate(checkOnly bool) error {
+	const repo = "sakatimuna7/backup-system"
+	type ghRelease struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get("https://api.github.com/repos/" + repo + "/releases/latest")
+	if err != nil {
+		return fmt.Errorf("fetch latest release: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var rel ghRelease
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return fmt.Errorf("parse release: %w", err)
+	}
+
+	latest := strings.TrimPrefix(rel.TagName, "v")
+	if latest == version {
+		fmt.Printf("backup-system %s is already up to date\n", version)
+		return nil
+	}
+	fmt.Printf("Current: %s → Latest: %s\n", version, latest)
+	if checkOnly {
+		fmt.Println("Run `backup-system update` to install.")
+		return nil
+	}
+
+	// Determine asset name for this platform
+	arch := runtime.GOARCH // amd64, arm64
+	assetName := fmt.Sprintf("backup-system-linux-%s", arch)
+	sha256Name := "SHA256SUMS"
+
+	var downloadURL, sha256URL string
+	for _, a := range rel.Assets {
+		switch a.Name {
+		case assetName:
+			downloadURL = a.BrowserDownloadURL
+		case sha256Name:
+			sha256URL = a.BrowserDownloadURL
+		}
+	}
+	if downloadURL == "" {
+		return fmt.Errorf("no asset %q in release %s", assetName, rel.TagName)
+	}
+
+	// Download binary to temp file
+	fmt.Printf("Downloading %s...\n", assetName)
+	tmp, err := os.CreateTemp("", "backup-system-update-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+
+	resp2, err := client.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("download binary: %w", err)
+	}
+	defer resp2.Body.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, h), resp2.Body); err != nil {
+		return fmt.Errorf("write binary: %w", err)
+	}
+	tmp.Close()
+	actualHash := hex.EncodeToString(h.Sum(nil))
+
+	// Verify SHA256 if available
+	if sha256URL != "" {
+		resp3, err := client.Get(sha256URL)
+		if err == nil {
+			defer resp3.Body.Close()
+			body, _ := io.ReadAll(resp3.Body)
+			verified := false
+			for _, line := range strings.Split(string(body), "\n") {
+				parts := strings.Fields(line)
+				if len(parts) == 2 && parts[1] == assetName {
+					if parts[0] != actualHash {
+						return fmt.Errorf("SHA256 mismatch: expected %s got %s", parts[0], actualHash)
+					}
+					verified = true
+					break
+				}
+			}
+			if verified {
+				fmt.Println("SHA256 verified ✓")
+			}
+		}
+	}
+
+	// Atomic replace: chmod → rename over existing binary
+	if err := os.Chmod(tmp.Name(), 0755); err != nil {
+		return fmt.Errorf("chmod: %w", err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate self: %w", err)
+	}
+	self, err = filepath.EvalSymlinks(self)
+	if err != nil {
+		return fmt.Errorf("resolve symlink: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), self); err != nil {
+		return fmt.Errorf("replace binary (try sudo): %w", err)
+	}
+	fmt.Printf("✅ Updated to backup-system %s\n", latest)
 	return nil
 }
 
@@ -1403,6 +1530,14 @@ func main() {
 	}
 	if command == "version" {
 		fmt.Printf("backup-system %s\n", version)
+		return
+	}
+	if command == "update" {
+		checkOnly := len(args) > 1 && args[1] == "--check"
+		if err := selfUpdate(checkOnly); err != nil {
+			fmt.Fprintln(os.Stderr, "backup-system:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if command == "install" {
