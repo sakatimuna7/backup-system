@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.12.0] - 2026-09-21
+
+### Added
+- **Pre/post hooks** — `backup.hooks.before`, `backup.hooks.after`, `backup.hooks.on_error` (bash commands run around backup)
+- **Status file** — `status.file` writes JSON after every backup (`last_run`, `success`, `repos[]`, `duration`) — compatible with Uptime Kuma / healthcheck.io
+- **Safety checks** — `safety.min_free_disk_mb` and `safety.min_free_memory_mb` abort backup before it starts if resources are low
+- **Stale lock auto-unlock** — `safety.lock_timeout_min` auto-runs `restic unlock` on repos with locks older than N minutes
+
 ## [0.11.0] - 2026-09-20
 
 ### Added

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	version       = "0.11.0"
+	version       = "0.12.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -48,6 +48,18 @@ type Config struct {
 	Schedule     ScheduleConfig     `yaml:"schedule"`
 	Recovery     RecoveryConfig     `yaml:"recovery"`
 	Notify       NotifyConfig       `yaml:"notify"`
+	Status       StatusConfig       `yaml:"status"`
+	Safety       SafetyConfig       `yaml:"safety"`
+}
+
+type StatusConfig struct {
+	File string `yaml:"file"` // path to write JSON status after backup
+}
+
+type SafetyConfig struct {
+	MinFreeDiskMB   int `yaml:"min_free_disk_mb"`   // abort if free disk < threshold
+	MinFreeMemoryMB int `yaml:"min_free_memory_mb"` // abort if free memory < threshold
+	LockTimeoutMin  int `yaml:"lock_timeout_min"`   // auto-unlock stale locks older than N minutes
 }
 
 type NotifyConfig struct {
@@ -220,8 +232,15 @@ func (r RepositoryConfig) displayName() string {
 }
 
 type BackupConfig struct {
-	Paths   []string `yaml:"paths"`
-	Exclude []string `yaml:"exclude"`
+	Paths   []string    `yaml:"paths"`
+	Exclude []string    `yaml:"exclude"`
+	Hooks   BackupHooks `yaml:"hooks"`
+}
+
+type BackupHooks struct {
+	Before  []string `yaml:"before"`
+	After   []string `yaml:"after"`
+	OnError []string `yaml:"on_error"`
 }
 type RetentionConfig struct {
 	Daily   int  `yaml:"daily"`
@@ -1065,6 +1084,131 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 	return errs
 }
 
+
+// ── Hooks ─────────────────────────────────────────────────────────────────
+
+func runHooks(hooks []string, label string) error {
+	for i, cmd := range hooks {
+		c := exec.Command("bash", "-c", cmd)
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		if err := c.Run(); err != nil {
+			return fmt.Errorf("hook[%s][%d] %q failed: %w", label, i, cmd, err)
+		}
+	}
+	return nil
+}
+
+// ── Safety checks ─────────────────────────────────────────────────────────
+
+func checkSafety(s SafetyConfig) error {
+	if s.MinFreeDiskMB > 0 {
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs("/", &stat); err == nil {
+			freeMB := int(stat.Bavail * uint64(stat.Bsize) / 1024 / 1024)
+			if freeMB < s.MinFreeDiskMB {
+				return fmt.Errorf("not enough free disk: %d MB available, need %d MB", freeMB, s.MinFreeDiskMB)
+			}
+		}
+	}
+	if s.MinFreeMemoryMB > 0 {
+		data, err := os.ReadFile("/proc/meminfo")
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "MemAvailable:") {
+					fields := strings.Fields(line)
+					if len(fields) >= 2 {
+						kb, _ := strconv.Atoi(fields[1])
+						freeMB := kb / 1024
+						if freeMB < s.MinFreeMemoryMB {
+							return fmt.Errorf("not enough free memory: %d MB available, need %d MB", freeMB, s.MinFreeMemoryMB)
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func unlockStaleLocks(a *app, repos []RepositoryConfig, timeoutMin int) {
+	if timeoutMin <= 0 {
+		return
+	}
+	for _, repo := range repos {
+		out, _, _ := a.runRepoCapture(repo, "list", "locks")
+		stale := false
+		threshold := time.Now().Add(-time.Duration(timeoutMin) * time.Minute)
+		for _, line := range strings.Split(out, "\n") {
+			// restic lock lines contain timestamp
+			if strings.Contains(line, "T") && len(line) > 20 {
+				// try parse date portion
+				parts := strings.Fields(line)
+				for _, p := range parts {
+					if t, err := time.Parse(time.RFC3339, p); err == nil {
+						if t.Before(threshold) {
+							stale = true
+						}
+					}
+				}
+			}
+		}
+		if stale {
+			fmt.Printf("unlocking stale lock in %s...\n", repo.displayName())
+			_ = a.runRepo(repo, "unlock")
+		}
+	}
+}
+
+// ── Status file ───────────────────────────────────────────────────────────
+
+type backupStatus struct {
+	Version    string        `json:"version"`
+	Hostname   string        `json:"hostname"`
+	LastRun    time.Time     `json:"last_run"`
+	Success    bool          `json:"success"`
+	Duration   string        `json:"duration"`
+	Repos      []repoStatus  `json:"repos"`
+}
+
+type repoStatus struct {
+	Name       string `json:"name"`
+	Success    bool   `json:"success"`
+	SnapshotID string `json:"snapshot_id,omitempty"`
+	FilesNew   string `json:"files_new,omitempty"`
+	Added      string `json:"added,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+func writeStatusFile(path string, results []BackupResult, success bool, dur time.Duration) {
+	if path == "" {
+		return
+	}
+	hostname, _ := os.Hostname()
+	status := backupStatus{
+		Version:  version,
+		Hostname: hostname,
+		LastRun:  time.Now().UTC(),
+		Success:  success,
+		Duration: dur.Round(time.Second).String(),
+	}
+	for _, r := range results {
+		rs := repoStatus{Name: r.Repo, Success: r.Err == nil, SnapshotID: r.SnapshotID, FilesNew: r.FilesNew, Added: r.Added}
+		if r.Err != nil {
+			rs.Error = r.Err.Error()
+		}
+		status.Repos = append(status.Repos, rs)
+	}
+	data, _ := json.MarshalIndent(status, "", "  ")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: status file mkdir: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: status file write: %v\n", err)
+	}
+}
 // loadEnvFile reads KEY=value pairs from path into the process environment.
 // Requires file mode 0600 or stricter. Skips blank lines and # comments.
 // No shell expansion — values are stored literally.
@@ -1664,8 +1808,26 @@ func main() {
 		if err == nil && (len(args) != 1 && len(args) != 3) {
 			err = errors.New("usage: backup [--repository name]")
 		} else if err == nil {
-			var results []BackupResult
+			// Safety checks before backup
+			if safeErr := checkSafety(c.Safety); safeErr != nil {
+				err = safeErr
+				break
+			}
+
 			repos, _ := selectRepositories(c, selector)
+
+			// Auto-unlock stale locks
+			unlockStaleLocks(a, repos, c.Safety.LockTimeoutMin)
+
+			// Before hooks
+			if hookErr := runHooks(c.Backup.Hooks.Before, "before"); hookErr != nil {
+				err = hookErr
+				_ = runHooks(c.Backup.Hooks.OnError, "on_error")
+				break
+			}
+
+			start := time.Now()
+			var results []BackupResult
 			for _, repo := range repos {
 				backupArgs := append([]string{"backup"}, a.cfg.Backup.Paths...)
 				for _, p := range a.cfg.Backup.Exclude {
@@ -1688,9 +1850,23 @@ func main() {
 					fmt.Printf("repository %s: OK\n", repo.displayName())
 				}
 			}
+			dur := time.Since(start)
+
+			// After/error hooks
+			if err != nil {
+				_ = runHooks(c.Backup.Hooks.OnError, "on_error")
+			} else {
+				_ = runHooks(c.Backup.Hooks.After, "after")
+			}
+
 			if err == nil && c.Retention.Prune {
 				err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.retentionRepo(r, true) })
 			}
+
+			// Write status file
+			writeStatusFile(c.Status.File, results, err == nil, dur)
+
+			// Telegram notification
 			if c.Notify.Telegram != nil {
 				hostname, _ := os.Hostname()
 				_, notifText := formatBackupNotif(results, hostname)
