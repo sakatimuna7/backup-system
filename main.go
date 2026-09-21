@@ -1084,7 +1084,6 @@ func recoveryRun(c Config, stagingOnly bool) []string {
 	return errs
 }
 
-
 // ── Hooks ─────────────────────────────────────────────────────────────────
 
 func runHooks(hooks []string, label string) error {
@@ -1164,12 +1163,12 @@ func unlockStaleLocks(a *app, repos []RepositoryConfig, timeoutMin int) {
 // ── Status file ───────────────────────────────────────────────────────────
 
 type backupStatus struct {
-	Version    string        `json:"version"`
-	Hostname   string        `json:"hostname"`
-	LastRun    time.Time     `json:"last_run"`
-	Success    bool          `json:"success"`
-	Duration   string        `json:"duration"`
-	Repos      []repoStatus  `json:"repos"`
+	Version  string       `json:"version"`
+	Hostname string       `json:"hostname"`
+	LastRun  time.Time    `json:"last_run"`
+	Success  bool         `json:"success"`
+	Duration string       `json:"duration"`
+	Repos    []repoStatus `json:"repos"`
 }
 
 type repoStatus struct {
@@ -1209,6 +1208,7 @@ func writeStatusFile(path string, results []BackupResult, success bool, dur time
 		fmt.Fprintf(os.Stderr, "warn: status file write: %v\n", err)
 	}
 }
+
 // loadEnvFile reads KEY=value pairs from path into the process environment.
 // Requires file mode 0600 or stricter. Skips blank lines and # comments.
 // No shell expansion — values are stored literally.
