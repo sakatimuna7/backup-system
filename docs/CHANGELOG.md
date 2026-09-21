@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.10.0] - 2026-09-20
+
+### Added
+- Detailed per-repo Telegram notifications after every backup
+- Shows: snapshot ID, files new/changed, size added, stored size
+- First backup detected (`no parent snapshot`) → labeled "full (first backup)"
+- Summary line: `All N repo(s) OK ✓` or `N OK, M failed`
+- Hostname included in notification header
+
 ## [0.9.0] - 2026-09-20
 
 ### Added

@@ -123,7 +123,7 @@ func TestRecoveryPlan(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.9.0" {
+	if version != "0.10.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")

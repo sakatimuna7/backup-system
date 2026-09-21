@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,7 +20,7 @@ import (
 )
 
 const (
-	version       = "0.9.0"
+	version       = "0.10.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -429,9 +430,14 @@ func cleanResticEnv(env []string) []string {
 }
 
 func (a *app) runRepo(repo RepositoryConfig, args ...string) error {
+	_, _, err := a.runRepoCapture(repo, args...)
+	return err
+}
+
+func (a *app) runRepoCapture(repo RepositoryConfig, args ...string) (string, string, error) {
 	restic, err := resticPath()
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), resticTimeout)
 	defer cancel()
@@ -441,21 +447,136 @@ func (a *app) runRepo(repo RepositoryConfig, args ...string) error {
 	if repo.RcloneConfig != "" {
 		cmd.Env = append(cmd.Env, "RCLONE_CONFIG="+repo.RcloneConfig)
 	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout = io.MultiWriter(os.Stdout, &outBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
 	if err := cmd.Run(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("restic timed out after %s; check repository connectivity and retry", resticTimeout)
+			return outBuf.String(), errBuf.String(), fmt.Errorf("restic timed out after %s; check repository connectivity and retry", resticTimeout)
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return fmt.Errorf("restic failed (exit %d): check the repository URL, password file, and restic output above", exitErr.ExitCode())
+			return outBuf.String(), errBuf.String(), fmt.Errorf("restic failed (exit %d): check the repository URL, password file, and restic output above", exitErr.ExitCode())
 		}
-		return fmt.Errorf("run restic: %w", err)
+		return outBuf.String(), errBuf.String(), fmt.Errorf("run restic: %w", err)
 	}
-	return nil
+	return outBuf.String(), errBuf.String(), nil
 }
 func (a *app) run(args ...string) error { return a.runRepo(a.cfg.Repositories[0], args...) }
+
+// BackupResult holds parsed restic backup output for one repository.
+type BackupResult struct {
+	Repo           string
+	Required       bool
+	SnapshotID     string // short ID
+	FilesNew       string
+	FilesChanged   string
+	FilesUnchanged string
+	Added          string // e.g. "2.681 MiB"
+	Stored         string // e.g. "461.060 KiB stored"
+	NoParent       bool   // first backup (no parent snapshot)
+	Err            error
+}
+
+func parseBackupOutput(out string) (snapshotID, filesNew, filesChanged, filesUnchanged, added, stored string, noParent bool) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "snapshot ") && strings.Contains(line, "saved") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				snapshotID = parts[1]
+			}
+		}
+		if strings.HasPrefix(line, "Files:") {
+			// Files:           0 new,     7 changed, 20577 unmodified
+			parts := strings.Fields(line)
+			if len(parts) >= 7 {
+				filesNew = parts[1]
+				filesChanged = parts[3]
+				filesUnchanged = parts[5]
+			}
+		}
+		if strings.HasPrefix(line, "Added to the repository:") {
+			// Added to the repository: 2.681 MiB (461.060 KiB stored)
+			rest := strings.TrimPrefix(line, "Added to the repository:")
+			rest = strings.TrimSpace(rest)
+			if idx := strings.Index(rest, "("); idx >= 0 {
+				added = strings.TrimSpace(rest[:idx])
+				stored = strings.TrimSuffix(strings.TrimSpace(rest[idx+1:]), ")")
+			} else {
+				added = rest
+			}
+		}
+		if strings.Contains(line, "no parent snapshot found") {
+			noParent = true
+		}
+	}
+	return
+}
+
+func formatBackupNotif(results []BackupResult, hostname string) (success bool, text string) {
+	success = true
+	for _, r := range results {
+		if r.Err != nil && r.Required {
+			success = false
+			break
+		}
+	}
+
+	icon := "✅"
+	if !success {
+		icon = "❌"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(icon + " *Backup " + hostname + "*\n")
+	sb.WriteString(strings.Repeat("─", 28) + "\n")
+
+	for _, r := range results {
+		label := r.Repo
+		if r.Required {
+			label += " (required)"
+		}
+		if r.Err != nil {
+			sb.WriteString("❌ `" + label + "`\n")
+			sb.WriteString("   Error: " + r.Err.Error() + "\n")
+			continue
+		}
+		sb.WriteString("✅ `" + label + "`\n")
+		if r.SnapshotID != "" {
+			sb.WriteString("   Snapshot: `" + r.SnapshotID + "`\n")
+		}
+		if r.NoParent {
+			sb.WriteString("   Type: full (first backup)\n")
+		} else if r.FilesNew != "" {
+			sb.WriteString("   Files: " + r.FilesNew + " new, " + r.FilesChanged + " changed\n")
+		}
+		if r.Added != "" {
+			line := "   Size: " + r.Added
+			if r.Stored != "" {
+				line += " (" + r.Stored + ")"
+			}
+			sb.WriteString(line + "\n")
+		}
+	}
+
+	sb.WriteString(strings.Repeat("─", 28) + "\n")
+	ok, fail := 0, 0
+	for _, r := range results {
+		if r.Err != nil {
+			fail++
+		} else {
+			ok++
+		}
+	}
+	if fail == 0 {
+		sb.WriteString("All " + strconv.Itoa(ok) + " repo(s) OK ✓")
+	} else {
+		sb.WriteString(strconv.Itoa(ok) + " OK, " + strconv.Itoa(fail) + " failed")
+	}
+
+	return success, sb.String()
+}
 
 func (a *app) backupRepo(repo RepositoryConfig) error {
 	args := append([]string{"backup"}, a.cfg.Backup.Paths...)
@@ -1408,18 +1529,40 @@ func main() {
 		if err == nil && (len(args) != 1 && len(args) != 3) {
 			err = errors.New("usage: backup [--repository name]")
 		} else if err == nil {
-			err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.backupRepo(r) })
+			var results []BackupResult
+			repos, _ := selectRepositories(c, selector)
+			for _, repo := range repos {
+				backupArgs := append([]string{"backup"}, a.cfg.Backup.Paths...)
+				for _, p := range a.cfg.Backup.Exclude {
+					backupArgs = append(backupArgs, "--exclude", p)
+				}
+				out, _, berr := a.runRepoCapture(repo, backupArgs...)
+				sid, fn, fc, fu, added, stored, noParent := parseBackupOutput(out)
+				r := BackupResult{
+					Repo: repo.displayName(), Required: repo.isRequired(),
+					SnapshotID: sid, FilesNew: fn, FilesChanged: fc, FilesUnchanged: fu,
+					Added: added, Stored: stored, NoParent: noParent, Err: berr,
+				}
+				results = append(results, r)
+				if berr != nil {
+					fmt.Fprintf(os.Stderr, "repository %s: FAILED: %v\n", repo.displayName(), berr)
+					if repo.isRequired() {
+						err = fmt.Errorf("required repository %s failed", repo.displayName())
+					}
+				} else {
+					fmt.Printf("repository %s: OK\n", repo.displayName())
+				}
+			}
 			if err == nil && c.Retention.Prune {
 				err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.retentionRepo(r, true) })
 			}
-		}
-		if notifyErr := sendTelegramNotify(c.Notify.Telegram, err == nil, func() string {
-			if err != nil {
-				return err.Error()
+			if c.Notify.Telegram != nil {
+				hostname, _ := os.Hostname()
+				_, notifText := formatBackupNotif(results, hostname)
+				if notifyErr := sendTelegramNotify(c.Notify.Telegram, err == nil, notifText); notifyErr != nil {
+					fmt.Fprintf(os.Stderr, "warn: %v\n", notifyErr)
+				}
 			}
-			return "Semua repository selesai dibackup"
-		}()); notifyErr != nil {
-			fmt.Fprintf(os.Stderr, "warn: %v\n", notifyErr)
 		}
 	case "snapshots":
 		if err == nil && (len(args) != 1 && len(args) != 3) {
