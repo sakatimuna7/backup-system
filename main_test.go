@@ -124,7 +124,7 @@ func TestRecoveryPlan(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.12.0" {
+	if version != "0.13.0" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -429,7 +429,7 @@ Added to the repository: 2.681 MiB (461.060 KiB stored)
 
 snapshot ef567890 saved
 `
-	sid, fn, fc, _, added, stored, noParent := parseBackupOutput(out)
+	sid, _, fn, fc, _, added, stored, noParent := parseBackupOutput(out)
 	if sid != "ef567890" {
 		t.Errorf("snapshot ID: got %q", sid)
 	}
@@ -448,7 +448,7 @@ snapshot ef567890 saved
 
 	// First backup (no parent)
 	out2 := "no parent snapshot found, will read all files\nsnapshot aabb1234 saved\n"
-	sid2, _, _, _, _, _, noParent2 := parseBackupOutput(out2)
+	sid2, _, _, _, _, _, _, noParent2 := parseBackupOutput(out2)
 	if sid2 != "aabb1234" {
 		t.Errorf("snapshot ID: got %q", sid2)
 	}

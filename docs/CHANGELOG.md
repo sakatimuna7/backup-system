@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [0.13.0] - 2026-09-21
+
+### Added
+- **File diff in Telegram notification** — setelah backup, `restic diff` dijalankan otomatis untuk list file yang new/changed/deleted. Telegram notif tampilkan tabel top 20 file; sisanya di status.json
+- **Full diff di status.json** — `diff_files[]` menyimpan semua entri diff (sampai 200) per repo
+
 ## [0.12.0] - 2026-09-21
 
 ### Added

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	version       = "0.12.0"
+	version       = "0.13.0"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -486,11 +486,51 @@ func (a *app) runRepoCapture(repo RepositoryConfig, args ...string) (string, str
 }
 func (a *app) run(args ...string) error { return a.runRepo(a.cfg.Repositories[0], args...) }
 
+// resticDiff runs `restic diff parentID snapshotID` and parses file entries.
+// Returns at most 200 entries to cap memory. Silent on error (best-effort).
+func (a *app) resticDiff(repo RepositoryConfig, parentID, snapshotID string) []DiffEntry {
+	out, _, err := a.runRepoCapture(repo, "diff", parentID, snapshotID)
+	if err != nil {
+		return nil
+	}
+	var entries []DiffEntry
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) < 3 {
+			continue
+		}
+		change := string(line[0])
+		if change != "+" && change != "-" && change != "M" {
+			continue
+		}
+		rest := strings.TrimSpace(line[1:])
+		// restic diff format: "+ /path/to/file   1.2 KiB" or just "+ /path"
+		var path, size string
+		// try split on last whitespace run that precedes a size token
+		if idx := strings.LastIndex(rest, "  "); idx > 0 {
+			candidate := strings.TrimSpace(rest[idx+2:])
+			// size tokens end in B/KiB/MiB/GiB
+			if strings.HasSuffix(candidate, "B") {
+				path = strings.TrimSpace(rest[:idx])
+				size = candidate
+			}
+		}
+		if path == "" {
+			path = rest
+		}
+		entries = append(entries, DiffEntry{Change: change, Path: path, Size: size})
+		if len(entries) >= 200 {
+			break
+		}
+	}
+	return entries
+}
+
 // BackupResult holds parsed restic backup output for one repository.
 type BackupResult struct {
 	Repo           string
 	Required       bool
 	SnapshotID     string // short ID
+	ParentID       string // parent snapshot for diff
 	FilesNew       string
 	FilesChanged   string
 	FilesUnchanged string
@@ -498,15 +538,29 @@ type BackupResult struct {
 	Stored         string // e.g. "461.060 KiB stored"
 	NoParent       bool   // first backup (no parent snapshot)
 	Err            error
+	DiffFiles      []DiffEntry // populated after backup via restic diff
 }
 
-func parseBackupOutput(out string) (snapshotID, filesNew, filesChanged, filesUnchanged, added, stored string, noParent bool) {
+type DiffEntry struct {
+	Change string // "+", "-", "M"
+	Path   string
+	Size   string // may be empty
+}
+
+func parseBackupOutput(out string) (snapshotID, parentID, filesNew, filesChanged, filesUnchanged, added, stored string, noParent bool) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "snapshot ") && strings.Contains(line, "saved") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				snapshotID = parts[1]
+			}
+		}
+		// "using parent snapshot abc12345"
+		if strings.HasPrefix(line, "using parent snapshot") {
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				parentID = parts[3]
 			}
 		}
 		if strings.HasPrefix(line, "Files:") {
@@ -580,6 +634,37 @@ func formatBackupNotif(results []BackupResult, hostname string) (success bool, t
 			}
 			sb.WriteString(line + "\n")
 		}
+
+		// Diff table — show up to 20 files, Telegram-safe monospace
+		if len(r.DiffFiles) > 0 {
+			const maxShow = 20
+			show := r.DiffFiles
+			truncated := 0
+			if len(show) > maxShow {
+				truncated = len(show) - maxShow
+				show = show[:maxShow]
+			}
+			sb.WriteString("```\n")
+			sb.WriteString("Ch  Path                           Size\n")
+			sb.WriteString(strings.Repeat("-", 45) + "\n")
+			for _, d := range show {
+				ch := d.Change
+				// truncate path to 30 chars
+				p := d.Path
+				if len(p) > 30 {
+					p = "…" + p[len(p)-29:]
+				}
+				sz := d.Size
+				if sz == "" {
+					sz = "-"
+				}
+				sb.WriteString(fmt.Sprintf("%-3s %-30s %s\n", ch, p, sz))
+			}
+			if truncated > 0 {
+				sb.WriteString(fmt.Sprintf("... and %d more (see status.json)\n", truncated))
+			}
+			sb.WriteString("```\n")
+		}
 	}
 
 	sb.WriteString(strings.Repeat("─", 28) + "\n")
@@ -597,7 +682,12 @@ func formatBackupNotif(results []BackupResult, hostname string) (success bool, t
 		sb.WriteString(strconv.Itoa(ok) + " OK, " + strconv.Itoa(fail) + " failed")
 	}
 
-	return success, sb.String()
+	// Telegram hard limit 4096 chars — truncate gracefully
+	out := sb.String()
+	if len(out) > 4000 {
+		out = out[:4000] + "\n... (truncated)"
+	}
+	return success, out
 }
 
 func (a *app) backupRepo(repo RepositoryConfig) error {
@@ -1172,12 +1262,14 @@ type backupStatus struct {
 }
 
 type repoStatus struct {
-	Name       string `json:"name"`
-	Success    bool   `json:"success"`
-	SnapshotID string `json:"snapshot_id,omitempty"`
-	FilesNew   string `json:"files_new,omitempty"`
-	Added      string `json:"added,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Name       string      `json:"name"`
+	Success    bool        `json:"success"`
+	SnapshotID string      `json:"snapshot_id,omitempty"`
+	ParentID   string      `json:"parent_id,omitempty"`
+	FilesNew   string      `json:"files_new,omitempty"`
+	Added      string      `json:"added,omitempty"`
+	Error      string      `json:"error,omitempty"`
+	DiffFiles  []DiffEntry `json:"diff_files,omitempty"`
 }
 
 func writeStatusFile(path string, results []BackupResult, success bool, dur time.Duration) {
@@ -1193,7 +1285,7 @@ func writeStatusFile(path string, results []BackupResult, success bool, dur time
 		Duration: dur.Round(time.Second).String(),
 	}
 	for _, r := range results {
-		rs := repoStatus{Name: r.Repo, Success: r.Err == nil, SnapshotID: r.SnapshotID, FilesNew: r.FilesNew, Added: r.Added}
+		rs := repoStatus{Name: r.Repo, Success: r.Err == nil, SnapshotID: r.SnapshotID, ParentID: r.ParentID, FilesNew: r.FilesNew, Added: r.Added, DiffFiles: r.DiffFiles}
 		if r.Err != nil {
 			rs.Error = r.Err.Error()
 		}
@@ -1834,10 +1926,10 @@ func main() {
 					backupArgs = append(backupArgs, "--exclude", p)
 				}
 				out, _, berr := a.runRepoCapture(repo, backupArgs...)
-				sid, fn, fc, fu, added, stored, noParent := parseBackupOutput(out)
+				sid, parentID, fn, fc, fu, added, stored, noParent := parseBackupOutput(out)
 				r := BackupResult{
 					Repo: repo.displayName(), Required: repo.isRequired(),
-					SnapshotID: sid, FilesNew: fn, FilesChanged: fc, FilesUnchanged: fu,
+					SnapshotID: sid, ParentID: parentID, FilesNew: fn, FilesChanged: fc, FilesUnchanged: fu,
 					Added: added, Stored: stored, NoParent: noParent, Err: berr,
 				}
 				results = append(results, r)
@@ -1861,6 +1953,22 @@ func main() {
 
 			if err == nil && c.Retention.Prune {
 				err = runRepositories(c, selector, func(r RepositoryConfig) error { return a.retentionRepo(r, true) })
+			}
+
+			// Populate diff for each successful repo (skip first backup — no parent)
+			repos2, _ := selectRepositories(c, selector)
+			for i := range results {
+				r := &results[i]
+				if r.Err != nil || r.NoParent || r.ParentID == "" || r.SnapshotID == "" {
+					continue
+				}
+				// find matching repo config
+				for _, repo := range repos2 {
+					if repo.displayName() == r.Repo {
+						r.DiffFiles = a.resticDiff(repo, r.ParentID, r.SnapshotID)
+						break
+					}
+				}
 			}
 
 			// Write status file
