@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	version       = "0.13.0"
+	version       = "0.13.1"
 	resticTimeout = 12 * time.Hour
 )
 
@@ -67,10 +67,11 @@ type NotifyConfig struct {
 }
 
 type TelegramNotifyConfig struct {
-	TokenFile string `yaml:"token_file"`
-	Token     string `yaml:"token"`
-	ChatID    string `yaml:"chat_id"`
-	ThreadID  string `yaml:"thread_id"`
+	TokenFile  string `yaml:"token_file"`
+	Token      string `yaml:"token"`
+	ChatID     string `yaml:"chat_id"`
+	ThreadID   string `yaml:"thread_id"`
+	SendDetail bool   `yaml:"send_detail"`
 }
 
 type RecoveryConfig struct {
@@ -590,7 +591,7 @@ func parseBackupOutput(out string) (snapshotID, parentID, filesNew, filesChanged
 	return
 }
 
-func formatBackupNotif(results []BackupResult, hostname string) (success bool, text string) {
+func formatBackupNotif(results []BackupResult, hostname string, sendDetail bool) (success bool, text string) {
 	success = true
 	for _, r := range results {
 		if r.Err != nil && r.Required {
@@ -635,8 +636,8 @@ func formatBackupNotif(results []BackupResult, hostname string) (success bool, t
 			sb.WriteString(line + "\n")
 		}
 
-		// Diff table — show up to 20 files, Telegram-safe monospace
-		if len(r.DiffFiles) > 0 {
+		// Diff table — only when sendDetail is enabled
+		if sendDetail && len(r.DiffFiles) > 0 {
 			const maxShow = 20
 			show := r.DiffFiles
 			truncated := 0
@@ -645,20 +646,20 @@ func formatBackupNotif(results []BackupResult, hostname string) (success bool, t
 				show = show[:maxShow]
 			}
 			sb.WriteString("```\n")
-			sb.WriteString("Ch  Path                           Size\n")
-			sb.WriteString(strings.Repeat("-", 45) + "\n")
+			sb.WriteString("Ch Path                           Size\n")
+			sb.WriteString(strings.Repeat("-", 42) + "\n")
 			for _, d := range show {
 				ch := d.Change
-				// truncate path to 30 chars
+				// truncate path to 28 chars for mobile monospace fit
 				p := d.Path
-				if len(p) > 30 {
-					p = "…" + p[len(p)-29:]
+				if len(p) > 28 {
+					p = "…" + p[len(p)-27:]
 				}
 				sz := d.Size
 				if sz == "" {
 					sz = "-"
 				}
-				sb.WriteString(fmt.Sprintf("%-3s %-30s %s\n", ch, p, sz))
+				sb.WriteString(fmt.Sprintf("%-2s %-28s %s\n", ch, p, sz))
 			}
 			if truncated > 0 {
 				sb.WriteString(fmt.Sprintf("... and %d more (see status.json)\n", truncated))
@@ -1484,13 +1485,14 @@ func sendTelegramNotify(cfg *TelegramNotifyConfig, success bool, detail string) 
 	if !success {
 		icon, title = "❌", "Backup gagal"
 	}
-	text := icon + " " + title
+	text := icon + " *" + title + "*"
 	if detail != "" {
-		text += "\n" + detail
+		text = detail
 	}
 	form := url.Values{}
 	form.Set("chat_id", cfg.ChatID)
 	form.Set("text", text)
+	form.Set("parse_mode", "Markdown")
 	if cfg.ThreadID != "" {
 		form.Set("message_thread_id", cfg.ThreadID)
 	}
@@ -1977,7 +1979,7 @@ func main() {
 			// Telegram notification
 			if c.Notify.Telegram != nil {
 				hostname, _ := os.Hostname()
-				_, notifText := formatBackupNotif(results, hostname)
+				_, notifText := formatBackupNotif(results, hostname, c.Notify.Telegram.SendDetail)
 				if notifyErr := sendTelegramNotify(c.Notify.Telegram, err == nil, notifText); notifyErr != nil {
 					fmt.Fprintf(os.Stderr, "warn: %v\n", notifyErr)
 				}

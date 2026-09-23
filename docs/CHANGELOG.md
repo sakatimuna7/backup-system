@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.13.1] - 2026-09-22
+
+### Fixed
+- **Telegram markdown parse mode** — request `parse_mode: Markdown` ditambahkan pada `sendMessage` agar code block monospace (\`\`\`) benar-benar dirender sebagai tabel rapi di client Telegram
+- **Format title notifikasi** — menghindari duplikasi icon/header saat message dikirim
+
+### Added
+- **Opsi `notify.telegram.send_detail`** — default `false`. Jika `false`, format notif Telegram kembali ringkas/bersih tanpa tabel diff file. Set `true` jika ingin diff file (top 20) langsung masuk di chat Telegram. Diff lengkap selalu tersimpan di `status.json`.
+
 ## [0.13.0] - 2026-09-21
 
 ### Added

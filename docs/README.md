@@ -8,7 +8,7 @@ Complete documentation for backup-system v0.9.0 — a small, auditable VPS backu
 - **[Commands Reference](COMMANDS.md)** — All CLI commands with examples
 - **[Recovery Guide](RECOVERY.md)** — Step-by-step disaster recovery
 - **[Production Deployment](PRODUCTION.md)** — Deployment checklist & limits
-- **[Changelog](CHANGELOG.md)** — Version history v0.1.0 → v0.11.0
+- **[Changelog](CHANGELOG.md)** — Version history v0.1.0 → v0.13.1
 
 ## References
 

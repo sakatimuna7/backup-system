@@ -108,9 +108,13 @@ notify:
     # token: "123:ABC..."             # or inline token (less secure)
     chat_id: "-1004469797164"         # Required: group/channel ID
     thread_id: "282"                  # Optional: topic thread ID
+    send_detail: false                # Optional: show file diff table in Telegram (default: false)
 ```
 
-Sends `✅ Backup berhasil` or `❌ Backup gagal` after every `backup` command.
+Sends backup summary after every `backup` command via Telegram Markdown.
+
+- `send_detail: false` (default): clean summary per repo (Snapshot ID, files changed/new, size).
+- `send_detail: true`: adds a monospace diff table of changed/new files (top 20) directly in the Telegram message. Full diff is always available in `status.json`.
 
 `token_file` supports:
 - `.env` format: `TELEGRAM_BOT_TOKEN=value` (comments with `#` are skipped)

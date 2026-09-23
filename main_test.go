@@ -124,7 +124,7 @@ func TestRecoveryPlan(t *testing.T) {
 }
 
 func TestConfigAndUX(t *testing.T) {
-	if version != "0.13.0" {
+	if version != "0.13.1" {
 		t.Fatalf("unexpected version: %s", version)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -459,10 +459,16 @@ snapshot ef567890 saved
 
 func TestFormatBackupNotif(t *testing.T) {
 	results := []BackupResult{
-		{Repo: "local", Required: true, SnapshotID: "abc12345", FilesNew: "3", FilesChanged: "7", Added: "2.6 MiB", Stored: "461 KiB stored"},
+		{
+			Repo: "local", Required: true, SnapshotID: "abc12345", FilesNew: "3", FilesChanged: "7", Added: "2.6 MiB", Stored: "461 KiB stored",
+			DiffFiles: []DiffEntry{
+				{Change: "+", Path: "/etc/nginx/nginx.conf", Size: "1.2 KiB"},
+				{Change: "M", Path: "/home/deploy/apps/app.js", Size: "-"},
+			},
+		},
 		{Repo: "gdrive", Required: false, NoParent: true, Added: "45 MiB"},
 	}
-	success, text := formatBackupNotif(results, "myhost")
+	success, text := formatBackupNotif(results, "myhost", false)
 	if !success {
 		t.Error("expected success")
 	}
@@ -475,12 +481,24 @@ func TestFormatBackupNotif(t *testing.T) {
 	if !strings.Contains(text, "All 2 repo(s) OK") {
 		t.Error("expected summary line")
 	}
+	if strings.Contains(text, "Ch Path") {
+		t.Error("did not expect diff table when sendDetail is false")
+	}
+
+	// Test with sendDetail = true
+	_, detailText := formatBackupNotif(results, "myhost", true)
+	if !strings.Contains(detailText, "Ch Path") {
+		t.Error("expected diff table header when sendDetail is true")
+	}
+	if !strings.Contains(detailText, "```") {
+		t.Error("expected code block markdown when sendDetail is true")
+	}
 
 	// One failed required
 	results2 := []BackupResult{
 		{Repo: "local", Required: true, Err: errors.New("disk full")},
 	}
-	success2, text2 := formatBackupNotif(results2, "myhost")
+	success2, text2 := formatBackupNotif(results2, "myhost", false)
 	if success2 {
 		t.Error("expected failure")
 	}
